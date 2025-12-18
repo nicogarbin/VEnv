@@ -1,3 +1,0 @@
-C:\Users\nikyg\Desktop\VEnv\venv>flutter emulators --launch emulatore_venv
-
-flutter run

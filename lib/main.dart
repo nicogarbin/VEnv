@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'screens/home_screen.dart';
+import 'screens/dynamic_map/dynamic_map.dart';
 
 void main() {
   runApp(const MyApp());

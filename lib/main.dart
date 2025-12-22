@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'screens/dynamic_map/dynamic_map.dart';
+import 'screens/alternative_path/alternative_path.dart';
 
 void main() {
   runApp(const MyApp());
@@ -20,7 +20,7 @@ class MyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const AlternativePath(),
     );
   }
 }

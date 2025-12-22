@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'screens/main_screen.dart'; 
+import 'screens/main_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -14,12 +14,10 @@ class MyApp extends StatelessWidget {
       title: 'Venice App',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF3B82F6),
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const MainScreen(), 
+      home: const MainScreen(),
     );
   }
 }

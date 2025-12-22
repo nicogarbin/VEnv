@@ -1,9 +1,20 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../main_screen.dart';
 
 class NewsScreen extends StatelessWidget {
   const NewsScreen({super.key});
+
+  Future<void> _openLink(BuildContext context, String url) async {
+    final uri = Uri.parse(url);
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Impossibile aprire il link.')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -32,15 +43,34 @@ class NewsScreen extends StatelessWidget {
                       style: TextStyle(color: Colors.grey),
                     ),
 
-                    for (int i = 0; i < 10; i++)
-                      Container(
-                        height: 100,
-                        margin: const EdgeInsets.symmetric(vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      )
+                    const SizedBox(height: 16),
+
+                    _NewsLinkCard(
+                      title: 'Comune di Venezia',
+                      subtitle: 'Sito ufficiale',
+                      icon: Icons.public,
+                      onTap: () => _openLink(context, 'https://www.comune.venezia.it/'),
+                    ),
+                    _NewsLinkCard(
+                      title: 'Venezia Today',
+                      subtitle: 'Notizie sulla marea',
+                      icon: Icons.directions_boat,
+                      onTap: () => _openLink(context, 'https://www.veneziatoday.it/tag/marea/'),
+                    ),
+                    _NewsLinkCard(
+                      title: 'Protezione Civile',
+                      subtitle: 'Avvisi e comunicazioni',
+                      icon: Icons.warning_amber_rounded,
+                      onTap: () => _openLink(context, 'https://protezionecivile.cittametropolitana.ve.it/news.html/'),
+                    ),
+                    _NewsLinkCard(
+                      title: 'Notizie ISPRA',
+                      subtitle: 'Notizie ambientali',
+                      icon: Icons.cloud,
+                      onTap: () => _openLink(context, 'https://www.venezia.isprambiente.it/news/'),
+                    )
+
+                      
                   ],
                 ),
               ),
@@ -112,6 +142,82 @@ class _StickyHeader extends StatelessWidget {
               ),
               const SizedBox(width: 48),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NewsLinkCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _NewsLinkCard({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 100,
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEFF6FF),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, color: const Color(0xFF0F172A)),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF0F172A),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.open_in_new, color: Colors.grey),
+              ],
+            ),
           ),
         ),
       ),

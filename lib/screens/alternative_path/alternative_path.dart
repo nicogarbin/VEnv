@@ -1,20 +1,19 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 
-class AlternativePath extends StatefulWidget {
-  const AlternativePath({super.key});
+class AlternativePathScreen extends StatefulWidget {
+  const AlternativePathScreen({super.key});
 
   @override
-  State<AlternativePath> createState() => _AlternativePathState();
+  State<AlternativePathScreen> createState() => _AlternativePathScreenState();
 }
 
-class _AlternativePathState extends State<AlternativePath> {
-  // Palette colori definita dall'HTML
-  final Color freshPrimary = const Color(0xFF00B4D8);
-  final Color freshText = const Color(0xFF334155);
-  final Color freshMuted = const Color(0xFF94A3B8);
+class _AlternativePathScreenState extends State<AlternativePathScreen> {
+  // Palette colori allineata con le altre schermate
+  final Color freshPrimary = Colors.blue;
+  final Color freshText = const Color(0xFF0F172A);
+  final Color freshMuted = Colors.grey;
 
   // Map State
   GoogleMapController? _mapController;
@@ -166,8 +165,6 @@ class _AlternativePathState extends State<AlternativePath> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _buildCircleBtn(Icons.layers_outlined, isPrimary: false),
-                        const SizedBox(height: 12),
                         _buildCircleBtn(Icons.my_location, isPrimary: true),
                       ],
                     ),
@@ -181,8 +178,6 @@ class _AlternativePathState extends State<AlternativePath> {
           ),
         ],
       ),
-      // --- Bottom Nav Bar Placeholder ---
-      bottomNavigationBar: _buildCustomNavBar(),
     );
   }
 
@@ -228,8 +223,8 @@ class _AlternativePathState extends State<AlternativePath> {
                     isDense: true,
                     contentPadding: EdgeInsets.zero,
                   ),
-                  style: const TextStyle(
-                    color: Color(0xFF334155),
+                  style: TextStyle(
+                    color: freshText,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
@@ -241,7 +236,6 @@ class _AlternativePathState extends State<AlternativePath> {
               ],
             ),
           ),
-          _buildIconBtn(Icons.mic_none),
           _buildIconBtn(Icons.tune, isFilled: true),
         ],
       ),
@@ -279,12 +273,6 @@ class _AlternativePathState extends State<AlternativePath> {
             ),
           ),
         ),
-        const SizedBox(width: 12),
-        _buildChip(
-          label: "Marea: Bassa",
-          icon: const Icon(Icons.water_drop, color: Colors.blueAccent, size: 16),
-          isRichText: true,
-        ),
       ],
     );
   }
@@ -311,20 +299,20 @@ class _AlternativePathState extends State<AlternativePath> {
           if (!isRichText)
             Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 12,
-                color: Color(0xFF4B5563),
+                color: freshText,
               ),
             )
           else
             RichText(
-              text: const TextSpan(
+              text: TextSpan(
                 style: TextStyle(
                   fontFamily: 'Manrope', // Se disponibile
                   fontWeight: FontWeight.bold,
                   fontSize: 12,
-                  color: Color(0xFF4B5563),
+                  color: freshText,
                 ),
                 children: [
                   TextSpan(text: "Marea: "),
@@ -555,58 +543,6 @@ class _AlternativePathState extends State<AlternativePath> {
           ],
         ),
       ),
-    );
-  }
-
-  // --- Bottom Nav Bar Placeholder ---
-  Widget _buildCustomNavBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 40), // Reduced horizontal padding
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(20),
-          topRight: Radius.circular(20),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 10,
-            offset: const Offset(0, -5),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _buildNavItem(Icons.map, "Mappa"),
-          _buildNavItem(Icons.history, "Storico"),
-          _buildNavItem(Icons.alt_route, "Percorso", isSelected: true),
-          _buildNavItem(Icons.article, "News"),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNavItem(IconData icon, String label, {bool isSelected = false}) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(
-          icon,
-          size: 28, // Increased icon size
-          color: isSelected ? freshPrimary : freshMuted,
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: isSelected ? freshPrimary : freshMuted,
-          ),
-        ),
-      ],
     );
   }
 }

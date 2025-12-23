@@ -81,7 +81,6 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                     color: fillColor,
                     borderColor: borderColor,
                     borderStrokeWidth: 1.5,
-                    isFilled: true,
                     disableHolesBorder: true,
                     label: feature['properties']?['nome'] ?? "Zona", // Se c'è un nome, lo usiamo dopo
                   ),

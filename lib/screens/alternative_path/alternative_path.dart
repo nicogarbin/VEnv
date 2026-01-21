@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_places_flutter/google_places_flutter.dart';
+import 'package:google_places_flutter/model/prediction.dart';
 
 class AlternativePathScreen extends StatefulWidget {
   const AlternativePathScreen({super.key});
@@ -20,22 +23,134 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
-  final TextEditingController _searchController = TextEditingController(text: "Ponte di Rialto");
+  final TextEditingController _searchController = TextEditingController();
 
   static const CameraPosition _kVenice = CameraPosition(
     target: LatLng(45.4408, 12.3155),
     zoom: 14.0,
   );
 
-  // Coordinate simulate
-  final LatLng _startLocation = const LatLng(45.4408, 12.3155); // Unive
-  final LatLng _endLocation = const LatLng(45.4381, 12.3359); // Rialto
+  // Coordinate dinamiche
+  LatLng? _startLocation; // Posizione utente
+  LatLng? _endLocation; // Destinazione selezionata
+  bool _isLoadingLocation = false;
 
   void _onMapCreated(GoogleMapController controller) {
     _mapController = controller;
+    _getUserLocation(); // Ottieni posizione all'avvio
+  }
+
+  Future<void> _getUserLocation() async {
+    setState(() {
+      _isLoadingLocation = true;
+    });
+
+    try {
+      // Verifica permessi
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Servizi di localizzazione disabilitati")),
+          );
+        }
+        setState(() {
+          _isLoadingLocation = false;
+        });
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Permesso di localizzazione negato")),
+            );
+          }
+          setState(() {
+            _isLoadingLocation = false;
+          });
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Permesso di localizzazione negato permanentemente")),
+          );
+        }
+        setState(() {
+          _isLoadingLocation = false;
+        });
+        return;
+      }
+
+      // Ottieni posizione
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      setState(() {
+        _startLocation = LatLng(position.latitude, position.longitude);
+        _isLoadingLocation = false;
+      });
+
+      // Aggiorna marker partenza
+      _updateStartMarker();
+
+      // Sposta camera sulla posizione utente
+      _mapController?.animateCamera(
+        CameraUpdate.newLatLng(_startLocation!),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Errore nel recupero della posizione: $e")),
+        );
+      }
+      setState(() {
+        _isLoadingLocation = false;
+      });
+    }
+  }
+
+  void _updateStartMarker() {
+    if (_startLocation != null) {
+      _markers.removeWhere((marker) => marker.markerId.value == 'start');
+      _markers.add(
+        Marker(
+          markerId: const MarkerId('start'),
+          position: _startLocation!,
+          infoWindow: const InfoWindow(title: 'La tua posizione'),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+        ),
+      );
+    }
   }
 
   Future<void> _startNavigation() async {
+    // Verifica che entrambe le posizioni siano disponibili
+    if (_startLocation == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Posizione di partenza non disponibile")),
+        );
+      }
+      return;
+    }
+
+    if (_endLocation == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Seleziona una destinazione")),
+        );
+      }
+      return;
+    }
+
     // 1. Setup Markers
     setState(() {
       _markers.clear();
@@ -44,7 +159,7 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
       _markers.add(
         Marker(
           markerId: const MarkerId('start'),
-          position: _startLocation,
+          position: _startLocation!,
           infoWindow: const InfoWindow(title: 'Partenza'),
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
         ),
@@ -52,8 +167,8 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
       _markers.add(
         Marker(
           markerId: const MarkerId('end'),
-          position: _endLocation,
-          infoWindow: const InfoWindow(title: 'Destinazione'),
+          position: _endLocation!,
+          infoWindow: InfoWindow(title: _searchController.text),
         ),
       );
     });
@@ -73,8 +188,8 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
     PolylinePoints polylinePoints = PolylinePoints(apiKey: googleApiKey);
     PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
       request: PolylineRequest(
-        origin: PointLatLng(_startLocation.latitude, _startLocation.longitude),
-        destination: PointLatLng(_endLocation.latitude, _endLocation.longitude),
+        origin: PointLatLng(_startLocation!.latitude, _startLocation!.longitude),
+        destination: PointLatLng(_endLocation!.latitude, _endLocation!.longitude),
         mode: TravelMode.walking,
       ),
     );
@@ -102,7 +217,7 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
         _polylines.add(
           Polyline(
             polylineId: const PolylineId('route_fallback'),
-            points: [_startLocation, _endLocation],
+            points: [_startLocation!, _endLocation!],
             color: freshPrimary.withOpacity(0.5),
             width: 5,
             patterns: [PatternItem.dash(10), PatternItem.gap(10)],
@@ -119,12 +234,12 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
     // 3. Move Camera
     LatLngBounds bounds = LatLngBounds(
       southwest: LatLng(
-        _startLocation.latitude < _endLocation.latitude ? _startLocation.latitude : _endLocation.latitude,
-        _startLocation.longitude < _endLocation.longitude ? _startLocation.longitude : _endLocation.longitude,
+        _startLocation!.latitude < _endLocation!.latitude ? _startLocation!.latitude : _endLocation!.latitude,
+        _startLocation!.longitude < _endLocation!.longitude ? _startLocation!.longitude : _endLocation!.longitude,
       ),
       northeast: LatLng(
-        _startLocation.latitude > _endLocation.latitude ? _startLocation.latitude : _endLocation.latitude,
-        _startLocation.longitude > _endLocation.longitude ? _startLocation.longitude : _endLocation.longitude,
+        _startLocation!.latitude > _endLocation!.latitude ? _startLocation!.latitude : _endLocation!.latitude,
+        _startLocation!.longitude > _endLocation!.longitude ? _startLocation!.longitude : _endLocation!.longitude,
       ),
     );
     
@@ -175,7 +290,13 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _buildCircleBtn(Icons.my_location, isPrimary: true),
+                        GestureDetector(
+                          onTap: _getUserLocation,
+                          child: _buildCircleBtn(
+                            _isLoadingLocation ? Icons.refresh : Icons.my_location,
+                            isPrimary: true,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -194,6 +315,8 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
   // --- Widgets per la Top Section ---
 
   Widget _buildSearchBar() {
+    final String? googleApiKey = dotenv.env['GOOGLE_MAPS_API_KEY'];
+    
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
@@ -226,22 +349,76 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
                     letterSpacing: 1.0,
                   ),
                 ),
-                TextField(
-                  controller: _searchController,
-                  decoration: const InputDecoration(
+                GooglePlaceAutoCompleteTextField(
+                  textEditingController: _searchController,
+                  googleAPIKey: googleApiKey ?? "",
+                  inputDecoration: const InputDecoration(
                     border: InputBorder.none,
                     isDense: true,
                     contentPadding: EdgeInsets.zero,
+                    hintText: "Cerca un luogo...",
                   ),
-                  style: TextStyle(
+                  textStyle: TextStyle(
                     color: freshText,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
-                  onSubmitted: (value) {
-                    // Simula ricerca
-                    _startNavigation();
+                  debounceTime: 400,
+                  countries: const ["it"],
+                  isLatLngRequired: true,
+                  getPlaceDetailWithLatLng: (Prediction prediction) {
+                    // Quando un luogo viene selezionato
+                    if (prediction.lat != null && prediction.lng != null) {
+                      setState(() {
+                        _endLocation = LatLng(
+                          double.parse(prediction.lat!),
+                          double.parse(prediction.lng!),
+                        );
+                        _searchController.text = prediction.description ?? "";
+                      });
+                      
+                      // Aggiungi marker destinazione
+                      _markers.removeWhere((marker) => marker.markerId.value == 'end');
+                      _markers.add(
+                        Marker(
+                          markerId: const MarkerId('end'),
+                          position: _endLocation!,
+                          infoWindow: InfoWindow(title: prediction.description),
+                        ),
+                      );
+                      
+                      // Sposta camera sulla destinazione
+                      _mapController?.animateCamera(
+                        CameraUpdate.newLatLng(_endLocation!),
+                      );
+                    }
                   },
+                  itemClick: (Prediction prediction) {
+                    _searchController.text = prediction.description ?? "";
+                    _searchController.selection = TextSelection.fromPosition(
+                      TextPosition(offset: _searchController.text.length),
+                    );
+                  },
+                  seperatedBuilder: const Divider(),
+                  containerHorizontalPadding: 10,
+                  itemBuilder: (context, index, Prediction prediction) {
+                    return Container(
+                      padding: const EdgeInsets.all(10),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.location_on, color: Colors.grey),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              prediction.description ?? "",
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  isCrossBtnShown: true,
                 ),
               ],
             ),

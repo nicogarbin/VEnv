@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AlternativePathScreen extends StatefulWidget {
   const AlternativePathScreen({super.key});
@@ -58,7 +59,16 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
     });
 
     // 2. Fetch Route from Google Directions API
-    const String googleApiKey = "insert api key here"; // Inserisci la tua API Key qui
+    final String? googleApiKey = dotenv.env['GOOGLE_MAPS_API_KEY'];
+    
+    if (googleApiKey == null || googleApiKey.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("API Key non configurata. Verifica il file .env")),
+        );
+      }
+      return;
+    }
     
     PolylinePoints polylinePoints = PolylinePoints(apiKey: googleApiKey);
     PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(

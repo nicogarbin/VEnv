@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../main_screen.dart'; // Import necessario per tornare alla Mappa
@@ -17,7 +16,6 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
   // COLORI AGGIORNATI PER ALLINEARSI ALLE ALTRE PAGINE
   static const _primary = Color(0xFF3B82F6);
   static const _background = Color(0xFFEFF6FF); // Sfondo standard richiesto
-  static const _surfaceLight = Colors.white;
   static const _textDark = Color(0xFF0F172A);
 
   static const _areas = <String>[

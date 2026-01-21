@@ -26,6 +26,10 @@ dependencies:
   # librerie per Firebase
   firebase_core: ^3.10.1  # Aggiungi questa
   cloud_firestore: ^5.6.0 # Aggiungi questa (per il database)
+
+  # Grafici + formattazione date
+  fl_chart: ^0.69.0
+  intl: ^0.20.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

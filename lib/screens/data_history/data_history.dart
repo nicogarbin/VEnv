@@ -1,5 +1,8 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:intl/intl.dart';
 import '../main_screen.dart'; // Import necessario per tornare alla Mappa
 
 class DataHistoryScreen extends StatefulWidget {
@@ -11,6 +14,64 @@ class DataHistoryScreen extends StatefulWidget {
 
 enum _Metric { tideLevel, airQuality, temperature }
 enum _Range { h24, w1, m1 }
+
+class _SeriesPoint {
+  final DateTime time;
+  final double value;
+
+  const _SeriesPoint({required this.time, required this.value});
+}
+
+class _MetricSpec {
+  final String collection;
+  final String valueField;
+  final String timeField;
+  final String? areaField;
+  final String title;
+  final String unit;
+  final bool isTideMeters;
+
+  const _MetricSpec({
+    required this.collection,
+    required this.valueField,
+    required this.timeField,
+    required this.title,
+    required this.unit,
+    this.areaField,
+    this.isTideMeters = false,
+  });
+
+  static _MetricSpec fromMetric(_Metric metric) {
+    switch (metric) {
+      case _Metric.tideLevel:
+        return const _MetricSpec(
+          collection: 'Maree',
+          valueField: 'altezza',
+          timeField: 'data',
+          areaField: 'zona',
+          title: 'Marea',
+          unit: 'cm',
+          isTideMeters: true,
+        );
+      case _Metric.airQuality:
+        return const _MetricSpec(
+          collection: "Qualita dell'aria",
+          valueField: 'valore',
+          timeField: 'data',
+          title: 'Qualità Aria',
+          unit: 'AQI',
+        );
+      case _Metric.temperature:
+        return const _MetricSpec(
+          collection: 'Temperatura',
+          valueField: 'valore',
+          timeField: 'data',
+          title: 'Temperatura',
+          unit: '°C',
+        );
+    }
+  }
+}
 
 class _DataHistoryScreenState extends State<DataHistoryScreen> {
   // COLORI AGGIORNATI PER ALLINEARSI ALLE ALTRE PAGINE
@@ -26,8 +87,86 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
   _Metric _selectedMetric = _Metric.tideLevel;
   _Range _selectedRange = _Range.h24;
 
+  static Duration _durationForRange(_Range range) {
+    switch (range) {
+      case _Range.h24:
+        return const Duration(hours: 24);
+      case _Range.w1:
+        return const Duration(days: 7);
+      case _Range.m1:
+        return const Duration(days: 30);
+    }
+  }
+
+  static DateTime? _parseFirestoreDate(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is Timestamp) return raw.toDate();
+    if (raw is DateTime) return raw;
+    if (raw is String) {
+      final direct = DateTime.tryParse(raw);
+      if (direct != null) return direct;
+
+      // Fallback comune: "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DDTHH:MM:SS"
+      final normalized = raw.contains(' ') && !raw.contains('T') ? raw.replaceFirst(' ', 'T') : raw;
+      return DateTime.tryParse(normalized);
+    }
+    return null;
+  }
+
+  Stream<List<_SeriesPoint>> _watchSeries() {
+    final spec = _MetricSpec.fromMetric(_selectedMetric);
+    final selectedArea = _areas[_selectedAreaIndex];
+    final cutoff = DateTime.now().subtract(_durationForRange(_selectedRange));
+
+    Query<Map<String, dynamic>> query = FirebaseFirestore.instance
+        .collection(spec.collection)
+        .orderBy(spec.timeField, descending: true)
+        .limit(500);
+
+    if (spec.areaField != null && _selectedMetric == _Metric.tideLevel) {
+      // Nota: qui filtra per "zona". Se i valori reali della collezione "Maree"
+      // non corrispondono alle aree UI (San Marco, Cannaregio, ...), potrai
+      // aggiornare _areas con i nomi delle stazioni reali.
+      query = query.where(spec.areaField!, isEqualTo: selectedArea);
+    }
+
+    return query.snapshots().map((snapshot) {
+      final points = <_SeriesPoint>[];
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final dt = _parseFirestoreDate(data[spec.timeField]);
+        if (dt == null) continue;
+        if (dt.isBefore(cutoff)) continue;
+
+        final rawValue = data[spec.valueField];
+        if (rawValue is! num) continue;
+
+        double value = rawValue.toDouble();
+        if (spec.isTideMeters) {
+          // In functions/main.py: altezza è in metri -> convertiamo in cm.
+          value = value * 100.0;
+        }
+
+        points.add(_SeriesPoint(time: dt, value: value));
+      }
+
+      points.sort((a, b) => a.time.compareTo(b.time));
+
+      // Downsample leggero per UI fluida (max ~160 punti)
+      const maxPoints = 160;
+      if (points.length <= maxPoints) return points;
+      final step = (points.length / maxPoints).ceil();
+      final sampled = <_SeriesPoint>[];
+      for (int i = 0; i < points.length; i += step) {
+        sampled.add(points[i]);
+      }
+      return sampled;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final metricSpec = _MetricSpec.fromMetric(_selectedMetric);
     return Scaffold(
       backgroundColor: _background, // Stesso sfondo delle altre schermate
       body: Stack(
@@ -57,13 +196,41 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
               const SizedBox(height: 16),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: _TrendCard(
-                  primary: _primary,
-                  range: _selectedRange,
-                  onRangeChange: (range) => setState(() => _selectedRange = range),
-                  valueText: '112',
-                  unitText: 'cm',
-                  deltaText: '+12%',
+                child: StreamBuilder<List<_SeriesPoint>>(
+                  stream: _watchSeries(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return _TrendCard(
+                        primary: _primary,
+                        range: _selectedRange,
+                        onRangeChange: (range) => setState(() => _selectedRange = range),
+                        title: metricSpec.title,
+                        unitText: metricSpec.unit,
+                        points: const [],
+                        errorText: 'Errore nel caricamento dati da Firebase',
+                      );
+                    }
+                    if (!snapshot.hasData) {
+                      return _TrendCard(
+                        primary: _primary,
+                        range: _selectedRange,
+                        onRangeChange: (range) => setState(() => _selectedRange = range),
+                        title: metricSpec.title,
+                        unitText: metricSpec.unit,
+                        points: const [],
+                        isLoading: true,
+                      );
+                    }
+
+                    return _TrendCard(
+                      primary: _primary,
+                      range: _selectedRange,
+                      onRangeChange: (range) => setState(() => _selectedRange = range),
+                      title: metricSpec.title,
+                      unitText: metricSpec.unit,
+                      points: snapshot.data!,
+                    );
+                  },
                 ),
               ),
               const SizedBox(height: 16),
@@ -336,21 +503,52 @@ class _TrendCard extends StatelessWidget {
   final Color primary;
   final _Range range;
   final ValueChanged<_Range> onRangeChange;
-  final String valueText;
+  final String title;
   final String unitText;
-  final String deltaText;
+  final List<_SeriesPoint> points;
+  final bool isLoading;
+  final String? errorText;
 
   const _TrendCard({
     required this.primary,
     required this.range,
     required this.onRangeChange,
-    required this.valueText,
     required this.unitText,
-    required this.deltaText,
+    required this.title,
+    required this.points,
+    this.isLoading = false,
+    this.errorText,
   });
+
+  String _formatValue(double v) {
+    // Evita .0 inutili
+    if (v.abs() >= 100) return v.toStringAsFixed(0);
+    if (v.abs() >= 10) return v.toStringAsFixed(1);
+    return v.toStringAsFixed(2);
+  }
+
+  ({String valueText, String deltaText}) _computeHeadline() {
+    if (points.isEmpty) return (valueText: '--', deltaText: '--');
+    final last = points.last.value;
+    String delta;
+    if (points.length < 2) {
+      delta = '--';
+    } else {
+      final first = points.first.value;
+      if (first == 0) {
+        delta = '--';
+      } else {
+        final pct = ((last - first) / first) * 100.0;
+        final sign = pct >= 0 ? '+' : '';
+        delta = '$sign${pct.toStringAsFixed(1)}%';
+      }
+    }
+    return (valueText: _formatValue(last), deltaText: delta);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final headline = _computeHeadline();
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
       child: Container(
@@ -375,7 +573,7 @@ class _TrendCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Trend Attuale'.toUpperCase(),
+                              title.toUpperCase(),
                               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                                     color: const Color(0xFF9CA3AF),
                                     fontWeight: FontWeight.w700,
@@ -387,7 +585,7 @@ class _TrendCard extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
                                 Text(
-                                  valueText,
+                                  headline.valueText,
                                   style: Theme.of(context).textTheme.displaySmall?.copyWith(
                                         color: Colors.white,
                                         fontWeight: FontWeight.w800,
@@ -414,10 +612,16 @@ class _TrendCard extends StatelessWidget {
                                   ),
                                   child: Row(
                                     children: [
-                                      Icon(Icons.trending_up, size: 14, color: primary),
+                                      Icon(
+                                        headline.deltaText.startsWith('-')
+                                            ? Icons.trending_down
+                                            : Icons.trending_up,
+                                        size: 14,
+                                        color: primary,
+                                      ),
                                       const SizedBox(width: 4),
                                       Text(
-                                        deltaText,
+                                        headline.deltaText,
                                         style: TextStyle(
                                           color: primary,
                                           fontWeight: FontWeight.w800,
@@ -442,9 +646,12 @@ class _TrendCard extends StatelessWidget {
                   const SizedBox(height: 14),
                   SizedBox(
                     height: 208,
-                    child: CustomPaint(
-                      painter: _TrendChartPainter(primary: primary),
-                      child: const SizedBox.expand(),
+                    child: _TrendChart(
+                      primary: primary,
+                      range: range,
+                      points: points,
+                      isLoading: isLoading,
+                      errorText: errorText,
                     ),
                   ),
                 ],
@@ -453,6 +660,169 @@ class _TrendCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _TrendChart extends StatelessWidget {
+  final Color primary;
+  final _Range range;
+  final List<_SeriesPoint> points;
+  final bool isLoading;
+  final String? errorText;
+
+  const _TrendChart({
+    required this.primary,
+    required this.range,
+    required this.points,
+    required this.isLoading,
+    required this.errorText,
+  });
+
+  String _formatBottom(DateTime dt) {
+    switch (range) {
+      case _Range.h24:
+        return DateFormat('HH:mm').format(dt);
+      case _Range.w1:
+        return DateFormat('E').format(dt); // lun, mar, ... (locale)
+      case _Range.m1:
+        return DateFormat('d/M').format(dt);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return const Center(
+        child: SizedBox(
+          height: 20,
+          width: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+
+    if (errorText != null) {
+      return Center(
+        child: Text(
+          errorText!,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Color(0xFF9CA3AF), fontWeight: FontWeight.w600),
+        ),
+      );
+    }
+
+    if (points.isEmpty) {
+      return const Center(
+        child: Text(
+          'Nessun dato nel range selezionato',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Color(0xFF9CA3AF), fontWeight: FontWeight.w600),
+        ),
+      );
+    }
+
+    final spots = points
+        .map((p) => FlSpot(p.time.millisecondsSinceEpoch.toDouble(), p.value))
+        .toList(growable: false);
+
+    double minY = points.first.value;
+    double maxY = points.first.value;
+    for (final p in points) {
+      if (p.value < minY) minY = p.value;
+      if (p.value > maxY) maxY = p.value;
+    }
+    final pad = (maxY - minY).abs() * 0.15;
+    final paddedMinY = minY - (pad == 0 ? 1 : pad);
+    final paddedMaxY = maxY + (pad == 0 ? 1 : pad);
+
+    final minX = spots.first.x;
+    final maxX = spots.last.x;
+
+    return LineChart(
+      LineChartData(
+        minX: minX,
+        maxX: maxX,
+        minY: paddedMinY,
+        maxY: paddedMaxY,
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          horizontalInterval: (paddedMaxY - paddedMinY) / 4,
+          getDrawingHorizontalLine: (value) => FlLine(
+            color: Colors.white.withOpacity(0.10),
+            strokeWidth: 1,
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+        titlesData: FlTitlesData(
+          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 40,
+              interval: (paddedMaxY - paddedMinY) / 4,
+              getTitlesWidget: (value, meta) {
+                return Text(
+                  value.toStringAsFixed(0),
+                  style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 10, fontWeight: FontWeight.w600),
+                );
+              },
+            ),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 28,
+              interval: (maxX - minX) / 3,
+              getTitlesWidget: (value, meta) {
+                final dt = DateTime.fromMillisecondsSinceEpoch(value.toInt());
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    _formatBottom(dt),
+                    style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 10, fontWeight: FontWeight.w600),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            color: primary,
+            barWidth: 3,
+            isStrokeCapRound: true,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(
+              show: true,
+              gradient: LinearGradient(
+                colors: [primary.withOpacity(0.30), primary.withOpacity(0.0)],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+            ),
+          ),
+        ],
+        lineTouchData: LineTouchData(
+          enabled: true,
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipColor: (touchedSpot) => Colors.black.withOpacity(0.75),
+            getTooltipItems: (touchedSpots) {
+              return touchedSpots.map((barSpot) {
+                final dt = DateTime.fromMillisecondsSinceEpoch(barSpot.x.toInt());
+                final label = '${DateFormat('dd/MM HH:mm').format(dt)}\n${barSpot.y.toStringAsFixed(2)}';
+                return LineTooltipItem(label, const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12));
+              }).toList(growable: false);
+            },
+          ),
+        ),
+      ),
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
     );
   }
 }
@@ -546,40 +916,4 @@ class _DotGridPainter extends CustomPainter {
   }
   @override
   bool shouldRepaint(covariant _DotGridPainter old) => old.dotColor != dotColor;
-}
-
-class _TrendChartPainter extends CustomPainter {
-  final Color primary;
-  const _TrendChartPainter({required this.primary});
-  @override
-  void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()..color = Colors.white.withOpacity(0.10)..strokeWidth = 1;
-    canvas.drawLine(Offset(0, size.height), Offset(size.width, size.height), gridPaint);
-    
-    // Logica semplificata del grafico per la demo
-    final path = Path();
-    path.moveTo(0, size.height * 0.8);
-    path.cubicTo(size.width * 0.2, size.height * 0.7, size.width * 0.5, size.height * 0.3, size.width, size.height * 0.2);
-    
-    final linePaint = Paint()
-      ..color = primary
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    canvas.drawPath(path, linePaint);
-    
-    // Sfumatura sotto
-    final areaPath = Path.from(path)
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
-      ..close();
-    final gradient = LinearGradient(
-      colors: [primary.withOpacity(0.3), primary.withOpacity(0.0)],
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-    );
-    canvas.drawPath(areaPath, Paint()..shader = gradient.createShader(Offset.zero & size));
-  }
-  @override
-  bool shouldRepaint(covariant _TrendChartPainter old) => old.primary != primary;
 }

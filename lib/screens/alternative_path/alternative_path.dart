@@ -90,7 +90,7 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
 
       // Ottieni posizione
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        desiredAccuracy: LocationAccuracy.best,
       );
 
       setState(() {

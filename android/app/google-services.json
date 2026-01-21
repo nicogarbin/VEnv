@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "528750738531",
+    "project_id": "venv-da7c9",
+    "storage_bucket": "venv-da7c9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:528750738531:android:c04feb45ca3a6d3e5b8c56",
+        "android_client_info": {
+          "package_name": "com.example.venv"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCulzbsfmRX7zhbNMUgrgDm-94-HdzSSj4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -75,9 +75,9 @@ class _MetricSpec {
 }
 
 class _DataHistoryScreenState extends State<DataHistoryScreen> {
-  // COLORI AGGIORNATI PER ALLINEARSI ALLE ALTRE PAGINE
-  static const _primary = Color(0xFF3B82F6);
-  static const _background = Color(0xFFEFF6FF); // Sfondo standard richiesto
+  // Palette colori coerente con tutta l'app
+  static const _primary = Colors.blue;
+  static const _background = Color(0xFFEFF6FF);
   static const _textDark = Color(0xFF0F172A);
 
   static const _tideStations = <String>[

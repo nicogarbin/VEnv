@@ -311,6 +311,120 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
     return numerator / denominator;
   }
 
+  // --- METODI PER IL METEO (AGGIUNTI) ---
+  
+  Future<Map<String, dynamic>> _fetchEnvironmentalData(LatLng location) async {
+    try {
+      // 1. Meteo (Temperatura)
+      final weatherUrl = Uri.parse(
+        'https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m'
+      );
+      
+      // 2. Qualità dell'aria (CAQI - Common Air Quality Index)
+      final aqiUrl = Uri.parse(
+        'https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${location.latitude}&longitude=${location.longitude}&current=european_aqi'
+      );
+
+      final results = await Future.wait([
+        http.get(weatherUrl),
+        http.get(aqiUrl),
+      ]);
+
+      final weatherRes = results[0];
+      final aqiRes = results[1];
+
+      double? temperature;
+      int? aqi;
+
+      if (weatherRes.statusCode == 200) {
+        final data = jsonDecode(weatherRes.body);
+        temperature = data['current']?['temperature_2m'];
+      }
+
+      if (aqiRes.statusCode == 200) {
+        final data = jsonDecode(aqiRes.body);
+        aqi = data['current']?['european_aqi'];
+      }
+
+      return {
+        'temp': temperature,
+        'aqi': aqi,
+      };
+    } catch (e) {
+      debugPrint("Errore meteo/aqi: $e");
+      return {};
+    }
+  }
+
+  String _getAqiDescription(int aqi) {
+    if (aqi < 30) return "Ottima";
+    if (aqi < 60) return "Buona";
+    if (aqi < 90) return "Mediocre";
+    return "Pessima";
+  }
+
+  Color _getAqiColor(int aqi) {
+    // Scala Blu (Bene) -> Rosso (Male)
+    if (aqi < 40) return Colors.blue; 
+    if (aqi < 70) return Colors.blue[900]!; 
+    if (aqi < 100) return Colors.red[300]!; 
+    return Colors.red; 
+  }
+
+  Color _getTempColor(double temp) {
+    // Blu per freddo/mite, Rosso per caldo
+    if (temp < 10) return Colors.blue[900]!; // Molto Freddo
+    if (temp < 25) return Colors.blue;       // Mite/Ok
+    if (temp < 30) return Colors.red[300]!;  // Caldo
+    return Colors.red;                       // Molto Caldo
+  }
+
+  // --- LOGICA INDICE DI RISCHIO ---
+
+  double _calculateRiskIndex(double tideCm, double? temp, int? aqi, double? zoneHeightCm) {
+    if (temp == null || aqi == null) return 0.0;
+    
+    // 1. Marea (60% Peso): Calcolata sulla differenza tra Marea e Altezza Suolo
+    double tideScore = 0.0;
+    // Se non abbiamo l'altezza della zona, usiamo un default prudente (es. 100cm)
+    double threshold = zoneHeightCm ?? 100.0;
+    
+    double waterLevel = tideCm - threshold; // Cm di acqua sopra il suolo
+    
+    if (waterLevel > 0) {
+      // Se c'è acqua a terra, il rischio sale. 
+      // Consideriamo "Critico" (100%) se ci sono più di 15cm d'acqua (servono stivali alti)
+      tideScore = (waterLevel / 15.0) * 100.0;
+    } else {
+      // Se l'acqua è sotto il livello del suolo, rischio marea è 0
+      tideScore = 0.0;
+    }
+    tideScore = tideScore.clamp(0.0, 100.0);
+
+    // 2. Aria (30% Peso): AQI europeo (0-100+)
+    double aqiScore = aqi.toDouble().clamp(0.0, 100.0);
+
+    // 3. Temperatura (10% Peso): Discomfort termico
+    double tempDelta = (temp - 20).abs();
+    double tempScore = (tempDelta * 2.0).clamp(0.0, 100.0);
+
+    // Calcolo Ponderato
+    return (tideScore * 0.60) + (aqiScore * 0.30) + (tempScore * 0.10);
+  }
+
+  Color _getRiskColor(double score) {
+    if (score < 30) return Colors.blue;       // Basso -> Blu
+    if (score < 60) return Colors.red[300]!;  // Medio -> Rosso Chiaro
+    return Colors.red;                        // Alto -> Rosso Scuro
+  }
+
+  String _getRiskLabel(double score) {
+    if (score < 30) return "BASSO";
+    if (score < 60) return "MODERATO";
+    if (score < 80) return "ELEVATO";
+    return "CRITICO";
+  }
+
   void _showZonePopup(ZoneModel zone) {
     // Calcolo marea stimata nel centro della zona
     final double? estimatedTide = _estimateTideAtPoint(zone.bounds.center);
@@ -318,70 +432,204 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
     // Recupero comunque il dato della stazione ufficiale per confronto (opzionale)
     final officialTide = (zone.stationName != null) ? _tideData[zone.stationName] : null;
 
+    // Future per i dati ambientali
+    final environmentalFuture = _fetchEnvironmentalData(zone.bounds.center);
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (ctx) => Padding(
         padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("Zona ${zone.id ?? 'N/D'}", style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            _infoRow("Altezza suolo media:", "${zone.meanHeight?.toStringAsFixed(2) ?? '-'} cm"),
-            _infoRow("Stazione rif.:", zone.stationName ?? "Nessuna"),
-            
-            const Divider(height: 24),
-            if (_isLoadingTide)
-              const Center(child: LinearProgressIndicator())
-            else 
-              Column(
+        child: SingleChildScrollView( // Aggiunto per evitare overflow su schermi piccoli
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Marea Stimata (Calcolata)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  Text("Zona ${zone.id ?? 'N/D'}", style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  if (zone.stationName != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(8)),
+                      child: Text(zone.stationName!, style: const TextStyle(fontSize: 12)),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _infoRow("Altezza suolo media:", "${zone.meanHeight?.toStringAsFixed(2) ?? '-'} cm"),
+              
+              const Divider(height: 16),
+              
+              // --- SEZIONE LIVELLO MAREA ---
+              const Text("Livello Marea", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey)),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Livello stimato:", style: TextStyle(fontSize: 16)),
+                  Text(
+                    estimatedTide != null ? "${estimatedTide.toStringAsFixed(1)} cm" : "N/D",
+                    style: TextStyle(
+                      fontSize: 22, 
+                      fontWeight: FontWeight.bold,
+                      color: estimatedTide != null ? _getTideColor(estimatedTide) : Colors.grey,
+                    ),
+                  ),
+                ],
+              ),
+
+              const Divider(height: 16),
+
+              // --- NUOVA SEZIONE METEO & ARIA & INDICE RISCHIO ---
+              const Text("Indice di Rischio & Ambiente", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey)),
+              const SizedBox(height: 12),
+              
+              FutureBuilder<Map<String, dynamic>>(
+                future: environmentalFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: Padding(
+                      padding: EdgeInsets.all(20.0),
+                      child: CircularProgressIndicator(),
+                    ));
+                  }
+                  
+                  final data = snapshot.data ?? {};
+                  final double? temp = data['temp'];
+                  final int? aqi = data['aqi'];
+
+                  // Calcolo Indice Unico
+                  double riskScore = 0.0;
+                  bool hasData = temp != null && aqi != null;
+                  if (hasData) {
+                    // Ora passiamo anche l'altezza media della zona!
+                    riskScore = _calculateRiskIndex(estimatedTide ?? 0, temp, aqi, zone.meanHeight);
+                  }
+
+                  if (!hasData) {
+                    return const Text("Dati ambientali non disponibili", style: TextStyle(color: Colors.grey));
+                  }
+
+                  final riskColor = _getRiskColor(riskScore);
+
+                  return Column(
                     children: [
-                      const Text("Livello stimato (interpolato):", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                      Text(
-                        estimatedTide != null ? "${estimatedTide.toStringAsFixed(1)} cm" : "N/D",
-                        style: TextStyle(
-                          fontSize: 22, 
-                          fontWeight: FontWeight.bold,
-                          color: estimatedTide != null ? _getTideColor(estimatedTide) : Colors.grey,
+                      // --- CARD INDICE DI RISCHIO ---
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: riskColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: riskColor, width: 2),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: riskColor,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 28),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "INDICE DI RISCHIO COMPLESSIVO",
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: riskColor.withOpacity(0.8), letterSpacing: 1.1),
+                                  ),
+                                  Text(
+                                    _getRiskLabel(riskScore),
+                                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: riskColor),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              "${riskScore.toInt()}/100",
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: riskColor),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  // Marea Stazione Ufficiale (Piccolo, per riferimento)
-                  if (zone.stationName != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+
+                      // --- GRIGLIA DATI AMBIENTALI ---
+                      Row(
                         children: [
-                          Text("Sensore ${zone.stationName}:", style: const TextStyle(fontSize: 13, color: Colors.black54)),
-                          Text(
-                            (officialTide != null && officialTide.valueCm != null) 
-                                ? "${officialTide.valueCm!.toStringAsFixed(1)} cm" 
-                                : "Dati non disponibili",
-                            style: TextStyle(
-                              fontSize: 13, 
-                              fontWeight: FontWeight.w500,
-                              color: (officialTide != null && officialTide.valueCm != null) 
-                                  ? Colors.black87 
-                                  : Colors.red,
+                          // Box Temperatura
+                          Expanded(
+                            child: Builder(
+                              builder: (context) {
+                                final tColor = _getTempColor(temp!);
+                                return Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: tColor.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: tColor.withOpacity(0.3)),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Icon(Icons.thermostat, color: tColor),
+                                      const SizedBox(height: 4),
+                                      const Text("Temperatura", style: TextStyle(fontSize: 12, color: Colors.black54)),
+                                      Text(
+                                        "${temp.toStringAsFixed(1)}°C", 
+                                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // Box Qualità Aria
+                          Expanded(
+                            child: Builder(
+                              builder: (context) {
+                                final aColor = _getAqiColor(aqi!);
+                                return Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: aColor.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: aColor.withOpacity(0.3)),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Icon(Icons.air, color: aColor),
+                                      const SizedBox(height: 4),
+                                      const Text("Qualità Aria", style: TextStyle(fontSize: 12, color: Colors.black54)),
+                                      Text(
+                                        _getAqiDescription(aqi), 
+                                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }
                             ),
                           ),
                         ],
                       ),
-                    ),
-                ],
+                    ],
+                  );
+                },
               ),
-            const SizedBox(height: 16),
-          ],
+              
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
       ),
     ).whenComplete(() {
@@ -404,17 +652,39 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
   }
 
   Color _getTideColor(double cm) {
-    if (cm > 80) return Colors.orange;
+    if (cm > 80) return Colors.red[300]!;
     if (cm > 110) return Colors.red;
     return Colors.blue;
   }
 
+  // Calcola il colore della zona in base all'altezza della marea stimata
+  Color _getZoneFillColor(ZoneModel zone) {
+    if (_selectedZone == zone) {
+      return Colors.red.withOpacity(0.4);
+    }
+    
+    // Default se mancano dati, un colore base
+    if (_tideData.isEmpty) return Colors.blue.withOpacity(0.2);
+
+    final double? tide = _estimateTideAtPoint(zone.bounds.center);
+    
+    if (tide == null) return Colors.blue.withOpacity(0.2);
+
+    // Mappatura dinamica: più alta è la marea, più scuro/opaco è il blu.
+    // Range ottimizzato: da 0cm (scuro minimo) a 140cm (scuro massimo).
+    double min = 0.0;
+    double max = 140.0;
+    
+    double t = ((tide - min) / (max - min)).clamp(0.0, 1.0);
+    
+    // Opacità tra 0.1 (chiaro) e 0.9 (molto scuro)
+    return Colors.blue.withOpacity(0.1 + (t * 0.8));
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Colori costanti
-    final normalFill = Colors.blue.withOpacity(0.2);
+    // Colori costanti per i bordi
     final normalBorder = Colors.blue.withOpacity(0.6);
-    final selectedFill = Colors.red.withOpacity(0.4);
     final selectedBorder = Colors.red;
 
     return Scaffold(
@@ -446,9 +716,12 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                           PolygonLayer(
                             polygons: _zones.map((zone) {
                               final isSelected = _selectedZone == zone;
+                              // Usa la funzione dinamica per il colore
+                              final fillColor = _getZoneFillColor(zone);
+                              
                               return Polygon(
                                 points: zone.points,
-                                color: isSelected ? selectedFill : normalFill,
+                                color: fillColor,
                                 borderColor: isSelected ? selectedBorder : normalBorder,
                                 borderStrokeWidth: isSelected ? 3.0 : 1.0,
                                 isFilled: true,

@@ -170,6 +170,13 @@ class _NewsLinkCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Material(
         color: Colors.transparent,
@@ -184,10 +191,10 @@ class _NewsLinkCard extends StatelessWidget {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFEFF6FF),
+                    color: Colors.blue.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(icon, color: const Color(0xFF0F172A)),
+                  child: Icon(icon, color: Colors.blue, size: 24),
                 ),
                 const SizedBox(width: 14),
                 Expanded(

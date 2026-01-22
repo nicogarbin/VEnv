@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../main_screen.dart'; // Import necessario per tornare alla Mappa
@@ -75,9 +76,9 @@ class _MetricSpec {
 }
 
 class _DataHistoryScreenState extends State<DataHistoryScreen> {
-  // Palette colori coerente con tutta l'app
-  static const _primary = Colors.blue;
-  static const _background = Color(0xFFEFF6FF);
+  // COLORI AGGIORNATI PER ALLINEARSI ALLE ALTRE PAGINE
+  static const _primary = Color(0xFF3B82F6);
+  static const _background = Color(0xFFEFF6FF); // Sfondo standard richiesto
   static const _textDark = Color(0xFF0F172A);
 
   static const _tideStations = <String>[
@@ -157,7 +158,7 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
   /// Carica le zone realmente presenti nella collezione "Maree".
   /// Firestore non ha "distinct", quindi estraiamo le zone dagli ultimi N documenti.
   Stream<List<String>> _watchTideAreas() {
-    return FirebaseFirestore.instance
+    return FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default')
         .collection('Maree')
         .orderBy('data', descending: true)
         .limit(2000)
@@ -184,6 +185,7 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
       int validCount,
       DateTime? latest,
       DateTime? oldest,
+      String? debugMessage,
     })
   > _watchSeries({required String selectedArea}) {
     final spec = _MetricSpec.fromMetric(_selectedMetric);
@@ -194,14 +196,14 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
     if (spec.areaField != null && _selectedMetric == _Metric.tideLevel) {
       // Per avere un grafico corretto serve ordine per "data".
       // Questo richiede indice composito: (zona ASC) + (data DESC) sulla collezione "Maree".
-      query = FirebaseFirestore.instance
+      query = FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default')
           .collection(spec.collection)
           .where(spec.areaField!, isEqualTo: selectedArea)
           .orderBy(spec.timeField, descending: true)
           .limit(3000);
     } else {
-      // Per aria/temperatura: nessun filtro, orderBy sicuro.
-      query = FirebaseFirestore.instance
+      // Per aria/temperatura: nessun filtro, NESSUN orderBy (richiede indice)
+      query = FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default')
           .collection(spec.collection)
           .orderBy(spec.timeField, descending: true)
           .limit(1000);
@@ -212,15 +214,33 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
       DateTime? latest;
       DateTime? oldest;
       var validCount = 0;
+      
+      String? firstError;
 
       for (final doc in snapshot.docs) {
         final data = doc.data();
 
-        final dt = _parseFirestoreDate(data[spec.timeField]);
-        if (dt == null) continue;
+        final rawDate = data[spec.timeField];
+        final dt = _parseFirestoreDate(rawDate);
+        if (dt == null) {
+           if (firstError == null) firstError = "Data invalida: $rawDate";
+           continue;
+        }
 
         final rawValue = data[spec.valueField];
-        if (rawValue is! num) continue;
+        
+        // Parsing tollerante: accetta sia numeri che stringhe numeriche
+        double? value;
+        if (rawValue is num) {
+          value = rawValue.toDouble();
+        } else if (rawValue is String) {
+          value = double.tryParse(rawValue);
+        }
+        
+        if (value == null) {
+           if (firstError == null) firstError = "Valore invalido: $rawValue";
+           continue;
+        }
 
         validCount += 1;
         if (latest == null || dt.isAfter(latest)) latest = dt;
@@ -228,7 +248,6 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
 
         if (dt.isBefore(cutoff)) continue;
 
-        double value = rawValue.toDouble();
         if (spec.isTideMeters) {
           // In functions/main.py: altezza è in metri -> convertiamo in cm.
           value = value * 100.0;
@@ -253,6 +272,11 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
         }
         displayPoints = sampled;
       }
+      
+      String? debugMessage;
+      if (snapshot.docs.isNotEmpty && validCount == 0) {
+         debugMessage = "Trovati ${snapshot.docs.length} docs ma 0 validi.\nErr: $firstError\nSpec: ${spec.valueField}, ${spec.timeField}";
+      }
 
       return (
         points: displayPoints,
@@ -260,6 +284,7 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
         validCount: validCount,
         latest: latest,
         oldest: oldest,
+        debugMessage: debugMessage,
       );
     });
   }
@@ -352,6 +377,7 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                               int validCount,
                               DateTime? latest,
                               DateTime? oldest,
+                              String? debugMessage,
                             })>(
                           stream: _watchSeries(selectedArea: selectedArea),
                           builder: (context, snapshot) {
@@ -395,7 +421,9 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                             final series = snapshot.data!;
                             String? emptyText;
                             if (series.points.isEmpty) {
-                              if (series.validCount > 0 &&
+                              if (series.debugMessage != null) {
+                                emptyText = 'DEBUG INFO:\n${series.debugMessage}';
+                              } else if (series.validCount > 0 &&
                                   series.latest != null) {
                                 emptyText =
                                     'Nessun dato nel range selezionato\n'
@@ -954,22 +982,34 @@ class _TrendChart extends StatelessWidget {
       );
     }
 
-    final spots = points
+    // Ordina i punti per data crescente
+    final sortedPoints = List<_SeriesPoint>.from(points)
+      ..sort((a, b) => a.time.compareTo(b.time));
+
+    final spots = sortedPoints
         .map((p) => FlSpot(p.time.millisecondsSinceEpoch.toDouble(), p.value))
         .toList(growable: false);
 
-    double minY = points.first.value;
-    double maxY = points.first.value;
-    for (final p in points) {
+    double minY = sortedPoints.first.value;
+    double maxY = sortedPoints.first.value;
+    for (final p in sortedPoints) {
       if (p.value < minY) minY = p.value;
       if (p.value > maxY) maxY = p.value;
     }
+    
     final pad = (maxY - minY).abs() * 0.15;
     final paddedMinY = minY - (pad == 0 ? 1 : pad);
     final paddedMaxY = maxY + (pad == 0 ? 1 : pad);
-
+    
     final minX = spots.first.x;
     final maxX = spots.last.x;
+    
+    // Calcola intervalli sicuri (mai zero)
+    final yRange = paddedMaxY - paddedMinY;
+    final yInterval = yRange > 0 ? yRange / 4 : 1.0;
+    
+    final xRange = maxX - minX;
+    final xInterval = xRange > 0 ? xRange / 3 : 1.0;
 
     return LineChart(
       LineChartData(
@@ -980,7 +1020,7 @@ class _TrendChart extends StatelessWidget {
         gridData: FlGridData(
           show: true,
           drawVerticalLine: false,
-          horizontalInterval: (paddedMaxY - paddedMinY) / 4,
+          horizontalInterval: yInterval,
           getDrawingHorizontalLine: (value) =>
               FlLine(color: Colors.white.withOpacity(0.10), strokeWidth: 1),
         ),
@@ -996,7 +1036,7 @@ class _TrendChart extends StatelessWidget {
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 40,
-              interval: (paddedMaxY - paddedMinY) / 4,
+              interval: yInterval,
               getTitlesWidget: (value, meta) {
                 return Text(
                   value.toStringAsFixed(0),
@@ -1013,7 +1053,7 @@ class _TrendChart extends StatelessWidget {
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 28,
-              interval: (maxX - minX) / 3,
+              interval: xInterval,
               getTitlesWidget: (value, meta) {
                 final dt = DateTime.fromMillisecondsSinceEpoch(value.toInt());
                 return Padding(
@@ -1034,7 +1074,7 @@ class _TrendChart extends StatelessWidget {
         lineBarsData: [
           LineChartBarData(
             spots: spots,
-            isCurved: true,
+            isCurved: false,
             color: primary,
             barWidth: 3,
             isStrokeCapRound: true,

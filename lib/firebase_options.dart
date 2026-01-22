@@ -47,28 +47,30 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyAJ2Hxqcpkv9DiuBBbSrlj-uKXTb1OF9Wc',
-    appId: '1:528750738531:web:1d2351b3b46c458e5b8c56',
-    messagingSenderId: '528750738531',
-    projectId: 'venv-da7c9',
-    authDomain: 'venv-da7c9.firebaseapp.com',
-    storageBucket: 'venv-da7c9.firebasestorage.app',
+    apiKey: 'AIzaSyAZwP7yIAM44qFYq0l65VHUSeshDukzwQk',
+    appId: '1:180112132193:web:4fa81d0400f9b2397e8220',
+    messagingSenderId: '180112132193',
+    projectId: 'ecstatic-gantry-477200-f2',
+    authDomain: 'ecstatic-gantry-477200-f2.firebaseapp.com',
+    storageBucket: 'ecstatic-gantry-477200-f2.firebasestorage.app',
+    measurementId: 'G-PQZL76EHYP',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyCulzbsfmRX7zhbNMUgrgDm-94-HdzSSj4',
-    appId: '1:528750738531:android:c04feb45ca3a6d3e5b8c56',
-    messagingSenderId: '528750738531',
-    projectId: 'venv-da7c9',
-    storageBucket: 'venv-da7c9.firebasestorage.app',
+    apiKey: 'AIzaSyDAiNxXmrd6jpQee84Wv5_-IlL67nAdmTk',
+    appId: '1:180112132193:android:e99d3b807c95dfb07e8220',
+    messagingSenderId: '180112132193',
+    projectId: 'ecstatic-gantry-477200-f2',
+    storageBucket: 'ecstatic-gantry-477200-f2.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyDoo-Jp-Z9tixM-ShulYk6OBLlrqPR8xc4',
-    appId: '1:528750738531:ios:720f90cfc7cbe84a5b8c56',
-    messagingSenderId: '528750738531',
-    projectId: 'venv-da7c9',
-    storageBucket: 'venv-da7c9.firebasestorage.app',
+    apiKey: 'AIzaSyChyR16QeHlvbKGtRn373Edo4PBnGskkrY',
+    appId: '1:180112132193:ios:76530ba54d0f53a47e8220',
+    messagingSenderId: '180112132193',
+    projectId: 'ecstatic-gantry-477200-f2',
+    storageBucket: 'ecstatic-gantry-477200-f2.firebasestorage.app',
     iosBundleId: 'com.example.venv',
   );
+
 }

@@ -79,6 +79,16 @@ String _normalizeStationName(String s) {
   return s.replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
+/// Modello per caching dati ambientali (per stima val mancanti)
+class EnvironmentalReading {
+  final LatLng location;
+  final double? temp;
+  final double? uv;
+  final int? aqi;
+
+  EnvironmentalReading({required this.location, this.temp, this.uv, this.aqi});
+}
+
 // --- LOGICA DI PARSING (ISOLATA) ---
 
 /// Questa funzione deve stare FUORI dalla classe State per essere usata con `compute`
@@ -111,7 +121,7 @@ List<ZoneModel> _parseGeoJsonInBackground(String jsonString) {
     }
 
     for (var poly in polygonsRaw) {
-      if (poly is List && poly.isNotEmpty) {
+      if (poly.isNotEmpty) {
         var outerRing = poly[0]; // Primo anello = contorno esterno
         List<LatLng> points = [];
         
@@ -162,6 +172,9 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
   // Stato Maree
   final Map<String, TideReading> _tideData = {};
   bool _isLoadingTide = true;
+
+  // Cache Dati Ambientali (per stima)
+  final List<EnvironmentalReading> _cachedEnvData = [];
 
   @override
   void initState() {
@@ -314,10 +327,16 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
   // --- METODI PER IL METEO (AGGIUNTI) ---
   
   Future<Map<String, dynamic>> _fetchEnvironmentalData(LatLng location) async {
+    double? temperature;
+    double? uvIndex;
+    int? aqi;
+    
+    bool apiSuccess = false;
+
     try {
-      // 1. Meteo (Temperatura)
+      // 1. Meteo (Temperatura e UV)
       final weatherUrl = Uri.parse(
-        'https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m'
+        'https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,uv_index'
       );
       
       // 2. Qualità dell'aria (CAQI - Common Air Quality Index)
@@ -328,32 +347,97 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
       final results = await Future.wait([
         http.get(weatherUrl),
         http.get(aqiUrl),
-      ]);
+      ]).timeout(const Duration(seconds: 5)); // Timeout rapido per evitare blocchi
 
       final weatherRes = results[0];
       final aqiRes = results[1];
 
-      double? temperature;
-      int? aqi;
-
       if (weatherRes.statusCode == 200) {
         final data = jsonDecode(weatherRes.body);
         temperature = data['current']?['temperature_2m'];
+        uvIndex = data['current']?['uv_index'];
       }
 
       if (aqiRes.statusCode == 200) {
         final data = jsonDecode(aqiRes.body);
         aqi = data['current']?['european_aqi'];
       }
-
-      return {
-        'temp': temperature,
-        'aqi': aqi,
-      };
+      
+      apiSuccess = true;
     } catch (e) {
       debugPrint("Errore meteo/aqi: $e");
-      return {};
     }
+
+    // Salva in cache SOLO se abbiamo dati reali (almeno uno)
+    if (apiSuccess && (temperature != null || uvIndex != null || aqi != null)) {
+      _cachedEnvData.add(EnvironmentalReading(
+        location: location,
+        temp: temperature,
+        uv: uvIndex,
+        aqi: aqi,
+      ));
+    }
+
+    // --- LOGICA DI RECUPERO e STIMA ---
+    bool tempEst = false;
+    bool uvEst = false;
+    bool aqiEst = false;
+
+    // Se mancano dati (o API fallita), proviamo a Stimare dai vicini
+    if (temperature == null || uvIndex == null || aqi == null) {
+      final estimates = _estimateEnvFromCache(location);
+      
+      if (temperature == null && estimates['temp'] != null) {
+        temperature = estimates['temp'];
+        tempEst = true;
+      }
+      if (uvIndex == null && estimates['uv'] != null) {
+        uvIndex = estimates['uv'];
+        uvEst = true;
+      }
+      if (aqi == null && estimates['aqi'] != null) {
+        aqi = estimates['aqi']?.toInt();
+        aqiEst = true;
+      }
+    }
+
+    return {
+      'temp': temperature,
+      'uv': uvIndex,
+      'aqi': aqi,
+      'temp_est': tempEst,
+      'uv_est': uvEst,
+      'aqi_est': aqiEst,
+    };
+  }
+  
+  /// Stima valori ambientali usando IDW sui dati in cache
+  Map<String, double?> _estimateEnvFromCache(LatLng point) {
+    if (_cachedEnvData.isEmpty) return {'temp': null, 'uv': null, 'aqi': null};
+
+    double numTemp = 0, denTemp = 0;
+    double numUv = 0, denUv = 0;
+    double numAqi = 0, denAqi = 0;
+    
+    const Distance distCalc = Distance();
+
+    for (var r in _cachedEnvData) {
+      double dist = distCalc.as(LengthUnit.Meter, point, r.location);
+      if (dist < 1.0) dist = 1.0; 
+      
+      // Peso inversamente proporzionale alla distanza^2
+      double weight = 1.0 / (dist * dist);
+
+      if (r.temp != null) { numTemp += r.temp! * weight; denTemp += weight; }
+      if (r.uv != null) { numUv += r.uv! * weight; denUv += weight; }
+      if (r.aqi != null) { numAqi += r.aqi!.toDouble() * weight; denAqi += weight; }
+    }
+
+    return {
+      'temp': denTemp > 0 ? numTemp / denTemp : null,
+      'uv': denUv > 0 ? numUv / denUv : null,
+      'aqi': denAqi > 0 ? numAqi / denAqi : null,
+    };
   }
 
   String _getAqiDescription(int aqi) {
@@ -364,27 +448,33 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
   }
 
   Color _getAqiColor(int aqi) {
-    // Scala Blu (Bene) -> Rosso (Male)
-    if (aqi < 40) return Colors.blue; 
-    if (aqi < 70) return Colors.blue[900]!; 
+    // Scala Verde (Bene) -> Rosso (Male)
+    if (aqi < 40) return Colors.green; 
+    if (aqi < 70) return Colors.orange; 
     if (aqi < 100) return Colors.red[300]!; 
     return Colors.red; 
   }
 
   Color _getTempColor(double temp) {
-    // Blu per freddo/mite, Rosso per caldo
-    if (temp < 10) return Colors.blue[900]!; // Molto Freddo
-    if (temp < 25) return Colors.blue;       // Mite/Ok
-    if (temp < 30) return Colors.red[300]!;  // Caldo
-    return Colors.red;                       // Molto Caldo
+    // Scala Verde (Comfort) -> Rosso (Discomfort)
+    // Ho allargato i range per non segnare subito rosso il freddo moderato
+    if (temp >= 15 && temp <= 27) return Colors.green; // Comfort
+    if (temp >= 5 && temp < 35) return Colors.orange; // Un po' freddo o caldo
+    return Colors.red; // Gelo (<5) o Caldo torrido (>35)
+  }
+  
+  Color _getUvColor(double uv) {
+    if (uv < 4) return Colors.green; // Basso
+    if (uv < 7) return Colors.orange; // Moderato/Alto
+    return Colors.red; // Molto Alto/Estremo
   }
 
   // --- LOGICA INDICE DI RISCHIO ---
 
-  double _calculateRiskIndex(double tideCm, double? temp, int? aqi, double? zoneHeightCm) {
+  double _calculateRiskIndex(double tideCm, double? temp, int? aqi, double? uv, double? zoneHeightCm) {
     if (temp == null || aqi == null) return 0.0;
     
-    // 1. Marea (60% Peso): Calcolata sulla differenza tra Marea e Altezza Suolo
+    // 1. Marea (50% Peso): Calcolata sulla differenza tra Marea e Altezza Suolo
     double tideScore = 0.0;
     // Se non abbiamo l'altezza della zona, usiamo un default prudente (es. 100cm)
     double threshold = zoneHeightCm ?? 100.0;
@@ -401,21 +491,28 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
     }
     tideScore = tideScore.clamp(0.0, 100.0);
 
-    // 2. Aria (30% Peso): AQI europeo (0-100+)
+    // 2. Aria (25% Peso): AQI europeo (0-100+)
     double aqiScore = aqi.toDouble().clamp(0.0, 100.0);
 
-    // 3. Temperatura (10% Peso): Discomfort termico
+    // 3. Raggi UV (15% Peso): Scala 0-11+
+    double uvScore = 0.0;
+    if (uv != null) {
+      uvScore = (uv / 11.0) * 100.0;
+      uvScore = uvScore.clamp(0.0, 100.0);
+    }
+
+    // 4. Temperatura (10% Peso): Discomfort termico
     double tempDelta = (temp - 20).abs();
     double tempScore = (tempDelta * 2.0).clamp(0.0, 100.0);
 
     // Calcolo Ponderato
-    return (tideScore * 0.60) + (aqiScore * 0.30) + (tempScore * 0.10);
+    return (tideScore * 0.50) + (aqiScore * 0.25) + (uvScore * 0.15) + (tempScore * 0.10);
   }
 
   Color _getRiskColor(double score) {
-    if (score < 30) return Colors.blue;       // Basso -> Blu
-    if (score < 60) return Colors.red[300]!;  // Medio -> Rosso Chiaro
-    return Colors.red;                        // Alto -> Rosso Scuro
+    if (score < 30) return Colors.green;       // Basso -> Verde
+    if (score < 60) return Colors.orange;  // Medio -> Arancione
+    return Colors.red;                        // Alto -> Rosso
   }
 
   String _getRiskLabel(double score) {
@@ -498,21 +595,33 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                   }
                   
                   final data = snapshot.data ?? {};
+                  
                   final double? temp = data['temp'];
+                  final double? uv = data['uv'];
                   final int? aqi = data['aqi'];
 
-                  // Calcolo Indice Unico
+                  // Flag se sono stimati
+                  final bool isTempEst = data['temp_est'] == true;
+                  final bool isUvEst = data['uv_est'] == true;
+                  final bool isAqiEst = data['aqi_est'] == true;
+
+                  final bool anyEstimated = isTempEst || isUvEst || isAqiEst;
+
+                  // Calcolo Indice Unico (Usa i valori solo se disponibili)
                   double riskScore = 0.0;
-                  bool hasData = temp != null && aqi != null;
+                  bool hasData = temp != null && aqi != null; // UV è opzionale nella formula precedente ma meglio averlo
+                  
                   if (hasData) {
-                    // Ora passiamo anche l'altezza media della zona!
-                    riskScore = _calculateRiskIndex(estimatedTide ?? 0, temp, aqi, zone.meanHeight);
+                    riskScore = _calculateRiskIndex(estimatedTide ?? 0, temp, aqi, uv, zone.meanHeight);
                   }
 
                   if (!hasData) {
-                    return const Text("Dati ambientali non disponibili", style: TextStyle(color: Colors.grey));
+                     return const Padding(
+                       padding: EdgeInsets.symmetric(vertical: 20),
+                       child: Center(child: Text("Dati ambientali non disponibili", style: TextStyle(color: Colors.grey))),
+                     );
                   }
-
+                  
                   final riskColor = _getRiskColor(riskScore);
 
                   return Column(
@@ -550,6 +659,14 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                                     _getRiskLabel(riskScore),
                                     style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: riskColor),
                                   ),
+                                  if (anyEstimated)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4.0),
+                                      child: Text(
+                                        "* Valori mancanti stimati",
+                                        style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: Colors.black45),
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
@@ -568,7 +685,7 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                           Expanded(
                             child: Builder(
                               builder: (context) {
-                                final tColor = _getTempColor(temp!);
+                                final tColor = _getTempColor(temp);
                                 return Container(
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
@@ -585,6 +702,8 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                                         "${temp.toStringAsFixed(1)}°C", 
                                         style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
                                       ),
+                                      if (isTempEst)
+                                        const Text("(stimato)", style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: Colors.grey)),
                                     ],
                                   ),
                                 );
@@ -596,7 +715,7 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                           Expanded(
                             child: Builder(
                               builder: (context) {
-                                final aColor = _getAqiColor(aqi!);
+                                final aColor = _getAqiColor(aqi);
                                 return Container(
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
@@ -614,6 +733,38 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                         textAlign: TextAlign.center,
                                       ),
+                                      if (isAqiEst)
+                                        const Text("(stimato)", style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: Colors.grey)),
+                                    ],
+                                  ),
+                                );
+                              }
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // Box Raggi UV
+                          Expanded(
+                            child: Builder(
+                              builder: (context) {
+                                final uColor = (uv != null) ? _getUvColor(uv) : Colors.grey;
+                                return Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: uColor.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: uColor.withOpacity(0.3)),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Icon(Icons.wb_sunny, color: uColor),
+                                      const SizedBox(height: 4),
+                                      const Text("Raggi UV", style: TextStyle(fontSize: 12, color: Colors.black54)),
+                                      Text(
+                                        uv != null ? uv.toStringAsFixed(1) : "N/D", 
+                                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+                                      ),
+                                      if (isUvEst)
+                                        const Text("(stimato)", style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: Colors.grey)),
                                     ],
                                   ),
                                 );
@@ -685,7 +836,7 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
   Widget build(BuildContext context) {
     // Colori costanti per i bordi
     final normalBorder = Colors.blue.withOpacity(0.6);
-    final selectedBorder = Colors.red;
+    const selectedBorder = Colors.red;
 
     return Scaffold(
       backgroundColor: const Color(0xFFEFF6FF),
@@ -712,6 +863,7 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                           TileLayer(
                             urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
                             subdomains: const ['a', 'b', 'c', 'd'],
+                            retinaMode: RetinaMode.isHighDensity(context), // Attiva alta risoluzione su schermi HD
                           ),
                           PolygonLayer(
                             polygons: _zones.map((zone) {

@@ -6,7 +6,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_places_flutter/google_places_flutter.dart';
 import 'package:google_places_flutter/model/prediction.dart';
 import 'dart:convert';
-import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
@@ -115,11 +114,13 @@ List<_ZoneModel> _parseGeoJsonInBackground(String jsonString) {
     if (geometry['type'] == 'Polygon') {
       polygonsRaw.add(geometry['coordinates']);
     } else if (geometry['type'] == 'MultiPolygon') {
-      for (var p in geometry['coordinates']) polygonsRaw.add(p);
+      for (var p in geometry['coordinates']) {
+        polygonsRaw.add(p);
+      }
     }
 
     for (var poly in polygonsRaw) {
-      if (poly is List && poly.isNotEmpty) {
+      if (poly.isNotEmpty) {
         var outerRing = poly[0];
         List<LatLng> points = [];
         for (var point in outerRing) {
@@ -307,6 +308,14 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
     }
     return (intersectCount % 2) != 0;
   }
+  
+  // 0=Verde (<20), 1=Giallo (<50), 2=Arancio (<80), 3=Rosso
+  int _getRiskTier(double risk) {
+    if (risk < 20) return 0;
+    if (risk < 50) return 1;
+    if (risk < 80) return 2;
+    return 3;
+  }
 
   /// Calcola il rischio in un punto (0-100)
   double _calculateRiskAtPoint(LatLng point) {
@@ -374,7 +383,7 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
     }
 
     // Aggiungi ultimo segmento
-    if (currentSegment.length >= 1) {
+    if (currentSegment.isNotEmpty) {
       polylines.add(Polyline(
         polylineId: PolylineId('route_$segmentId'),
         points: currentSegment,
@@ -529,67 +538,268 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
       );
     });
 
-    // 2. Fetch Route from Google Directions API
     final String? googleApiKey = dotenv.env['GOOGLE_MAPS_API_KEY'];
-    
     if (googleApiKey == null || googleApiKey.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("API Key non configurata. Verifica il file .env")),
-        );
-      }
+      if (mounted) _showErrorSnackBar("API Key non configurata");
       return;
     }
-    
-    // Chiamata diretta all'API Google Directions per ottenere durata e distanza
-    final String directionsUrl = 
-        'https://maps.googleapis.com/maps/api/directions/json?'
-        'origin=${_startLocation!.latitude},${_startLocation!.longitude}'
-        '&destination=${_endLocation!.latitude},${_endLocation!.longitude}'
-        '&mode=walking'
-        '&key=$googleApiKey';
 
     try {
-      final response = await http.get(Uri.parse(directionsUrl));
-      final data = json.decode(response.body);
+      // 1. Ottieni percorsi standard (con alternative)
+      var allRoutes = await _getGoogleRoutes(
+        _startLocation!, 
+        _endLocation!, 
+        googleApiKey, 
+        alternatives: true
+      );
 
-      if (data['status'] == 'OK' && data['routes'].isNotEmpty) {
-        final route = data['routes'][0];
-        final leg = route['legs'][0];
-        
-        // Estrai durata e distanza dalla risposta
-        String duration = leg['duration']['text'] ?? "--";
-        int durationSeconds = leg['duration']['value'] ?? 0;
-        String distance = leg['distance']['text'] ?? "--";
-        int distanceMeters = leg['distance']['value'] ?? 0;
-        
-        // Parse durata in minuti
-        int durationMinutes = (durationSeconds / 60).ceil();
-        
-        // Parse distanza
-        String distanceValue = "--";
-        String distanceUnit = "";
-        if (distanceMeters >= 1000) {
-          distanceValue = (distanceMeters / 1000).toStringAsFixed(1);
-          distanceUnit = "km";
-        } else {
-          distanceValue = distanceMeters.toString();
-          distanceUnit = "m";
+      // 2. Analisi iniziale: il percorso "migliore" standard è sicuro?
+      // Se il miglior percorso standard ha un rischio > 0, proviamo a calcolare deviazioni
+      bool needsDetour = false;
+      if (_isRiskDataLoaded && _zones.isNotEmpty && allRoutes.isNotEmpty) {
+         // Analizziamo il maxRisk del migliore standard
+         double standardMinMaxRisk = double.infinity;
+         for (var route in allRoutes) {
+            double risk = _calculateRouteMaxRisk(route);
+            if (risk < standardMinMaxRisk) standardMinMaxRisk = risk;
+         }
+         
+         // Se il rischio è Giallo o peggio (>20), cerchiamo deviazioni sicure
+         if (standardMinMaxRisk > 20) {
+            needsDetour = true;
+            debugPrint("⚠️ Percorsi standard rischiosi (MaxRisk: $standardMinMaxRisk). Cerco deviazioni sicure...");
+            if (mounted) {
+               ScaffoldMessenger.of(context).showSnackBar(
+                 const SnackBar(
+                   content: Text("Cerco percorsi alternativi sicuri..."), 
+                   duration: Duration(milliseconds: 1500)
+                 )
+               );
+            }
+         }
+      }
+
+      // 3. (Opzionale) Safe Detour Search
+      if (needsDetour) {
+         final detours = await _findSafeDetourRoutes(_startLocation!, _endLocation!, googleApiKey);
+         if (detours.isNotEmpty) {
+           debugPrint("✅ Trovati ${detours.length} percorsi deviati sicuri.");
+           allRoutes.addAll(detours);
+         } else {
+           debugPrint("❌ Nessuna deviazione sicura trovata.");
+         }
+      }
+
+      if (allRoutes.isNotEmpty) {
+        // Analisi finale di TUTTI i percorsi (Standard + Deviazioni)
+        _analyzeAndSelectBestRoute(allRoutes);
+      } else {
+        _handleRouteError("ZERO_RESULTS", "Nessun percorso trovato");
+      }
+
+    } catch (e) {
+       _handleNetworkError(e);
+    }
+  }
+
+  /// Recupera percorsi da Google Directions API
+  Future<List<dynamic>> _getGoogleRoutes(
+    LatLng start, 
+    LatLng end, 
+    String apiKey, 
+    {bool alternatives = false, LatLng? waypoint}
+  ) async {
+    String url = 'https://maps.googleapis.com/maps/api/directions/json?'
+        'origin=${start.latitude},${start.longitude}'
+        '&destination=${end.latitude},${end.longitude}'
+        '&mode=walking'
+        '&key=$apiKey';
+    
+    if (alternatives) url += '&alternatives=true';
+    if (waypoint != null) {
+      // Usiamo 'via:' per non creare uno stopover che divide il percorso in legs
+      url += '&waypoints=via:${waypoint.latitude},${waypoint.longitude}';
+    }
+
+    final response = await http.get(Uri.parse(url));
+    final data = json.decode(response.body);
+
+    if (data['status'] == 'OK') {
+      return data['routes'] as List<dynamic>;
+    }
+    return [];
+  }
+
+  /// Cerca percorsi alternativi passando per "Punti Sicuri"
+  Future<List<dynamic>> _findSafeDetourRoutes(LatLng start, LatLng end, String apiKey) async {
+    List<dynamic> detourRoutes = [];
+    
+    // 1. Identifica Zone Sicure Candidate
+    // Cerchiamo zone con Rischio 0 che siano "utili" (non troppo lontane dall'area di interesse)
+    List<_ZoneModel> safeCandidates = [];
+    
+    // Bounding Box allargato dell'area di viaggio
+    double minLat = (start.latitude < end.latitude ? start.latitude : end.latitude) - 0.01;
+    double maxLat = (start.latitude > end.latitude ? start.latitude : end.latitude) + 0.01;
+    double minLng = (start.longitude < end.longitude ? start.longitude : end.longitude) - 0.01;
+    double maxLng = (start.longitude > end.longitude ? start.longitude : end.longitude) + 0.01;
+
+    for (var zone in _zones) {
+      // Deve essere dentro il bounding box
+      if (zone.bounds.center.latitude < minLat || zone.bounds.center.latitude > maxLat) continue;
+      if (zone.bounds.center.longitude < minLng || zone.bounds.center.longitude > maxLng) continue;
+      
+      // Deve essere SICURA (Rischio 0)
+      if (_calculateRiskAtPoint(zone.bounds.center) < 10) { // Tolleranza: quasi asciutta
+        safeCandidates.add(zone);
+      }
+    }
+
+    if (safeCandidates.isEmpty) return [];
+
+    // 2. Seleziona 2-3 waypoint strategici dai candidati
+    // Ordiniamo per distanza dal centro del percorso per non deviare troppo?
+    // O prendiamo punti "laterali"? Facciamo shuffle per casualità (simil-Monte Carlo)
+    safeCandidates.shuffle();
+    var selectedWaypoints = safeCandidates.take(3).map((z) => z.bounds.center).toList();
+
+    // 3. Richiedi percorsi per questi waypoint
+    for (var wp in selectedWaypoints) {
+       var routes = await _getGoogleRoutes(start, end, apiKey, waypoint: wp);
+       detourRoutes.addAll(routes);
+    }
+
+    return detourRoutes;
+  }
+
+  double _calculateRouteMaxRisk(dynamic route) {
+     List<LatLng> points = _getDetailedPoints(route);
+     double maxRisk = 0.0;
+     for (var p in points) {
+        double r = _calculateRiskAtPoint(p);
+        if (r > maxRisk) maxRisk = r;
+     }
+     return maxRisk;
+  }
+
+  List<LatLng> _getDetailedPoints(dynamic route) {
+      List<LatLng> allPoints = [];
+      if (route['legs'] != null) {
+        for (var leg in route['legs']) {
+          if (leg['steps'] != null) {
+            for (var step in leg['steps']) {
+              String? p = step['polyline']?['points'];
+              if (p != null) {
+                var decoded = PolylinePoints.decodePolyline(p);
+                allPoints.addAll(decoded.map((x) => LatLng(x.latitude, x.longitude)));
+              }
+            }
+          }
         }
+      }
+      if (allPoints.isEmpty && route['overview_polyline']?['points'] != null) {
+        var decoded = PolylinePoints.decodePolyline(route['overview_polyline']['points']);
+        allPoints = decoded.map((x) => LatLng(x.latitude, x.longitude)).toList();
+      }
+      return allPoints;
+  }
 
-        // Decodifica polyline
-        String encodedPolyline = route['overview_polyline']['points'];
-        List<PointLatLng> decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
-        List<LatLng> polylineCoordinates = decodedPoints
-            .map((point) => LatLng(point.latitude, point.longitude))
-            .toList();
+  void _analyzeAndSelectBestRoute(List<dynamic> routes) {
+        Map<String, dynamic>? bestRoute;
+        List<LatLng>? bestRoutePoints;
+        
+        List<Map<String, dynamic>> analyzedRoutes = [];
 
-        // Crea polylines colorate per rischio
+        // Analisi
+        if (_isRiskDataLoaded && _zones.isNotEmpty) {
+           for (var route in routes) {
+              List<LatLng> points = _getDetailedPoints(route);
+              double maxRisk = 0.0;
+              double totalRisk = 0.0;
+              
+              for (var p in points) {
+                double r = _calculateRiskAtPoint(p);
+                if (r > maxRisk) maxRisk = r;
+                if (r > 0) totalRisk += r;
+              }
+              
+              // Calcola durata totale (somma delle legs se ci sono waypoint)
+              int totalDuration = 0;
+              if (route['legs'] != null) {
+                for(var leg in route['legs']) {
+                   totalDuration += (leg['duration']?['value'] ?? 0) as int;
+                }
+              }
+
+              analyzedRoutes.add({
+                'route': route,
+                'points': points,
+                'maxRisk': maxRisk,
+                'totalRisk': totalRisk,
+                'duration': totalDuration,
+              });
+           }
+           
+           // Ordina i percorsi:
+           analyzedRoutes.sort((a, b) {
+             double maxA = a['maxRisk'] as double;
+             double maxB = b['maxRisk'] as double;
+             
+             // 1. Priorità ASSOLUTA alla sicurezza (Rischio Massimo)
+             // Se c'è una differenza anche minima di rischio, vince quello meno rischioso.
+             // Nessuna tolleranza: Safety First.
+             if ((maxA - maxB).abs() > 0.1) {
+               return maxA.compareTo(maxB);
+             }
+             
+             // 2. A parità di picco (es. entrambi 0% o entrambi 30%), 
+             // vince quello con meno "quantità" di acqua totale.
+             double totalA = a['totalRisk'] as double;
+             double totalB = b['totalRisk'] as double;
+             if ((totalA - totalB).abs() > 1.0) {
+               return totalA.compareTo(totalB);
+             }
+             
+             // 3. Se sicurezza è identica, vince il più breve (Durata in secondi)
+             return (a['duration'] as int).compareTo(b['duration'] as int);
+           });
+           
+           if (analyzedRoutes.isNotEmpty) {
+             final best = analyzedRoutes.first;
+             bestRoute = best['route'];
+             bestRoutePoints = best['points'] as List<LatLng>;
+           }
+        } 
+        
+        // Default
+        if (bestRoute == null) {
+           bestRoute = routes[0];
+           bestRoutePoints = _getDetailedPoints(bestRoute);
+        }
+        
+        // Calcolo parametri display (uso i dati del 'bestRoute' che include somma legs)
+        int totalSeconds = 0;
+        int totalMeters = 0;
+         if (bestRoute!['legs'] != null) {
+            for(var leg in bestRoute!['legs']) {
+                totalSeconds += (leg['duration']?['value'] ?? 0) as int;
+                totalMeters += (leg['distance']?['value'] ?? 0) as int;
+            }
+         }
+        
+        int durationMinutes = (totalSeconds / 60).ceil();
+        String distanceValue = totalMeters >= 1000 
+            ? (totalMeters / 1000).toStringAsFixed(1) 
+            : totalMeters.toString();
+        String distanceUnit = totalMeters >= 1000 ? "km" : "m";
+
+        List<LatLng> polylineCoordinates = bestRoutePoints!;
+
+        // Polylines
         Set<Polyline> riskPolylines = {};
         if (_isRiskDataLoaded && _zones.isNotEmpty) {
           riskPolylines = _createRiskColoredPolylines(polylineCoordinates);
         } else {
-          // Fallback: percorso blu se dati rischio non disponibili
           riskPolylines.add(Polyline(
             polylineId: const PolylineId('route'),
             points: polylineCoordinates,
@@ -610,65 +820,47 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
           
           _polylines.addAll(riskPolylines);
         });
-      } else {
-        // Gestione errori API
-        String? status = data['status'];
-        String? errorMessage = data['error_message'];
-        _handleRouteError(status, errorMessage);
-      }
-    } catch (e) {
-       // Fallback: Linea retta se API fallisce o manca Key
-       // Calcola distanza approssimativa in linea d'aria
-       double fallbackDistanceMeters = Geolocator.distanceBetween(
-         _startLocation!.latitude, _startLocation!.longitude,
-         _endLocation!.latitude, _endLocation!.longitude,
-       );
-       // Stima tempo a piedi (5 km/h = 83.3 m/min)
-       int estimatedMinutes = (fallbackDistanceMeters / 83.3).ceil();
-       
+        
+        // Feedback non intrusivo (SnackBar invece di Dialog)
+        if (mounted && analyzedRoutes.isNotEmpty) {
+            final best = analyzedRoutes.first;
+            String msg = "Percorso aggiornato automaticamente.";
+            
+            if (best['maxRisk'] < 10) {
+              msg = "✅ Trovato percorso sicuro (100% asciutto).";
+            } else if (routes.length > 1) {
+              msg = "⚠️ Percorso ottimizzato: scelto il meno rischioso disponibile.";
+            }
+
+            // Mostra SnackBar solo se necessario per confermare l'azione automatica
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(msg),
+                backgroundColor: best['maxRisk'] < 20 ? Colors.green[700] : Colors.orange,
+                duration: const Duration(seconds: 2),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            );
+         }
+  }
+
+  void _handleNetworkError(dynamic e) {
+       // Fallback semplificato
        setState(() {
         _isRouteCalculated = true;
         _isCalculatingRoute = false;
-        _routeDurationMinutes = estimatedMinutes;
-        _routeDuration = estimatedMinutes > 0 ? "~$estimatedMinutes" : "--";
-        if (fallbackDistanceMeters >= 1000) {
-          _routeDistance = (fallbackDistanceMeters / 1000).toStringAsFixed(1);
-          _routeDistanceUnit = "km";
-        } else {
-          _routeDistance = fallbackDistanceMeters.toStringAsFixed(0);
-          _routeDistanceUnit = "m";
-        }
-        
-        _polylines.add(
-          Polyline(
-            polylineId: const PolylineId('route_fallback'),
-            points: [_startLocation!, _endLocation!],
-            color: freshPrimary.withOpacity(0.5),
-            width: 5,
-            patterns: [PatternItem.dash(10), PatternItem.gap(10)],
-          ),
-        );
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Errore di rete. Percorso stimato: $e")),
-        );
-      }
-    }
+        _routeDuration = "--";
+        _routeDistance = "--";
+       });
+       if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Errore: $e")));
+       }
+  }
 
-    // 3. Move Camera
-    LatLngBounds bounds = LatLngBounds(
-      southwest: LatLng(
-        _startLocation!.latitude < _endLocation!.latitude ? _startLocation!.latitude : _endLocation!.latitude,
-        _startLocation!.longitude < _endLocation!.longitude ? _startLocation!.longitude : _endLocation!.longitude,
-      ),
-      northeast: LatLng(
-        _startLocation!.latitude > _endLocation!.latitude ? _startLocation!.latitude : _endLocation!.latitude,
-        _startLocation!.longitude > _endLocation!.longitude ? _startLocation!.longitude : _endLocation!.longitude,
-      ),
-    );
-    
-    _mapController?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 50));
+  void _showErrorSnackBar(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   // Helper per convertire la stringa durata in minuti
@@ -915,7 +1107,7 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
+                    const Text(
                       "PARTENZA",
                       style: TextStyle(
                         color: Colors.blue,
@@ -1210,7 +1402,7 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
                   fontSize: 12,
                   color: freshText,
                 ),
-                children: [
+                children: const [
                   TextSpan(text: "Marea: "),
                   TextSpan(text: "Bassa", style: TextStyle(color: Colors.blue)),
                 ],

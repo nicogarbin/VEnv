@@ -30,6 +30,8 @@ dependencies:
   # Grafici + formattazione date
   fl_chart: ^0.69.0
   intl: ^0.20.0
+  path_provider: ^2.1.5
+  share_plus: ^12.0.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

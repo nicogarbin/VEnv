@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -77,7 +78,7 @@ class _MetricSpec {
 
 class _DataHistoryScreenState extends State<DataHistoryScreen> {
   // COLORI AGGIORNATI PER ALLINEARSI ALLE ALTRE PAGINE
-  static const _primary = Color(0xFF3B82F6);
+  static const _primary = Color(0xFF64B5F6); // Azzurro chiaro (Colors.blue.shade300)
   static const _background = Color(0xFFEFF6FF); // Sfondo standard richiesto
   static const _textDark = Color(0xFF0F172A);
 
@@ -437,23 +438,29 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                               }
                             }
 
-                            return _TrendCard(
-                              primary: _primary,
-                              range: _selectedRange,
-                              onRangeChange: (range) =>
-                                  setState(() => _selectedRange = range),
-                              title: metricSpec.title,
-                              unitText: metricSpec.unit,
-                              points: series.points,
-                              emptyText: emptyText,
+                            return Column(
+                              children: [
+                                _TrendCard(
+                                  primary: _primary,
+                                  range: _selectedRange,
+                                  onRangeChange: (range) =>
+                                      setState(() => _selectedRange = range),
+                                  title: metricSpec.title,
+                                  unitText: metricSpec.unit,
+                                  points: series.points,
+                                  emptyText: emptyText,
+                                ),
+                                const SizedBox(height: 16),
+                                _ExportButton(
+                                  points: series.points,
+                                  metricSpec: metricSpec,
+                                  selectedArea: selectedArea,
+                                  range: _selectedRange,
+                                ),
+                              ],
                             );
                           },
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: _ExportButton(onPressed: () {}),
                       ),
                       const SizedBox(height: 24),
                     ],
@@ -586,16 +593,15 @@ class _AreaChips extends StatelessWidget {
         itemBuilder: (context, index) {
           final selected = index == selectedIndex;
           if (selected) {
-            return FilledButton.tonalIcon(
+            return FilledButton(
               onPressed: () => onSelect(index),
               style: FilledButton.styleFrom(
                 backgroundColor: primary,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 shape: const StadiumBorder(),
               ),
-              icon: const Icon(Icons.check, size: 18),
-              label: Text(
+              child: Text(
                 areas[index],
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
@@ -1177,25 +1183,118 @@ class _RangePills extends StatelessWidget {
 }
 
 class _ExportButton extends StatelessWidget {
-  final VoidCallback onPressed;
+  final List<_SeriesPoint> points;
+  final _MetricSpec metricSpec;
+  final String selectedArea;
+  final _Range range;
 
-  const _ExportButton({required this.onPressed});
+  const _ExportButton({
+    required this.points,
+    required this.metricSpec,
+    required this.selectedArea,
+    required this.range,
+  });
+
+  Future<void> _exportData(BuildContext context) async {
+    if (points.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nessun dato da esportare'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Genera CSV
+      final csv = StringBuffer();
+      
+      // Header
+      csv.writeln('Data e Ora,${metricSpec.title} (${metricSpec.unit})');
+      
+      // Ordina per data crescente
+      final sortedPoints = List<_SeriesPoint>.from(points)
+        ..sort((a, b) => a.time.compareTo(b.time));
+      
+      // Dati
+      for (final point in sortedPoints) {
+        final dateStr = DateFormat('dd/MM/yyyy HH:mm:ss').format(point.time);
+        csv.writeln('$dateStr,${point.value.toStringAsFixed(2)}');
+      }
+
+      // Aggiungi metadati in fondo
+      csv.writeln('');
+      csv.writeln('--- Informazioni Report ---');
+      csv.writeln('Metrica,${metricSpec.title}');
+      csv.writeln('Area,$selectedArea');
+      csv.writeln('Range,${_rangeToString(range)}');
+      csv.writeln('Data Generazione,${DateFormat('dd/MM/yyyy HH:mm:ss').format(DateTime.now())}');
+      csv.writeln('Numero Punti Dati,${sortedPoints.length}');
+
+      // Copia negli appunti
+      await Clipboard.setData(ClipboardData(text: csv.toString()));
+      
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Report copiato negli appunti!\n${sortedPoints.length} punti dati - Incollalo dove vuoi',
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Errore durante l\'esportazione: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String _rangeToString(_Range range) {
+    switch (range) {
+      case _Range.h24:
+        return 'Ultime 24 ore';
+      case _Range.w1:
+        return 'Ultima settimana';
+      case _Range.m1:
+        return 'Ultimo mese';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return OutlinedButton.icon(
-      onPressed: onPressed,
+      onPressed: points.isEmpty ? null : () => _exportData(context),
       style: OutlinedButton.styleFrom(
         backgroundColor: Colors.white,
         foregroundColor: const Color(0xFF0F172A),
-        side: const BorderSide(color: Color(0xFFE5E7EB)),
+        disabledForegroundColor: const Color(0xFF9CA3AF),
+        side: BorderSide(
+          color: points.isEmpty ? const Color(0xFFE5E7EB) : const Color(0xFF3B82F6),
+        ),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
-      icon: const Icon(Icons.download),
-      label: const Text(
-        'Esporta Report Dati',
-        style: TextStyle(fontWeight: FontWeight.w800),
+      icon: const Icon(Icons.copy),
+      label: Text(
+        'Esporta Report (${points.length} punti)',
+        style: const TextStyle(fontWeight: FontWeight.w800),
       ),
     );
   }

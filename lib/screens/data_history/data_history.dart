@@ -223,7 +223,7 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
         final rawDate = data[spec.timeField];
         final dt = _parseFirestoreDate(rawDate);
         if (dt == null) {
-           if (firstError == null) firstError = "Data invalida: $rawDate";
+           firstError ??= "Data invalida: $rawDate";
            continue;
         }
 
@@ -238,7 +238,7 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
         }
         
         if (value == null) {
-           if (firstError == null) firstError = "Valore invalido: $rawValue";
+           firstError ??= "Valore invalido: $rawValue";
            continue;
         }
 
@@ -350,7 +350,7 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                         primary: _primary,
                       ),
                       const SizedBox(height: 16),
-                      _SectionTitle(
+                      const _SectionTitle(
                         title: 'Seleziona Metrica',
                         foregroundColor: _textDark,
                       ),
@@ -688,7 +688,7 @@ class _MetricTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final borderColor = selected ? primary : const Color(0xFFE5E7EB);
-    final surface = Colors.white;
+    const surface = Colors.white;
     final titleColor = selected
         ? const Color(0xFF0F172A)
         : const Color(0xFF0F172A);

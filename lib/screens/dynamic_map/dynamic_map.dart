@@ -200,6 +200,7 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
     }
   }
 
+<<<<<<< HEAD
   Future<void> _loadTideData() async {
     try {
       final uri = Uri.parse('https://dati.venezia.it/sites/default/files/dataset/opendata/livello.json');
@@ -214,6 +215,59 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
             final reading = TideReading.fromApi(item);
             if (reading.station.isNotEmpty) {
               tempMap[reading.station] = reading;
+=======
+      if (data['features'] != null) {
+        for (var feature in data['features']) {
+          var geometry = feature['geometry'];
+          if (geometry == null) continue;
+
+          // Usiamo 'dynamic' per essere più flessibili ed evitare l'errore di cast
+          List<dynamic> allPolygonsRaw = [];
+
+          // 1. NORMALIZZAZIONE: Mettiamo tutto in una lista di poligoni
+          if (geometry['type'] == 'Polygon') {
+            // Un poligono è una lista di anelli. Lo aggiungiamo alla lista generale.
+            allPolygonsRaw.add(geometry['coordinates']);
+          } else if (geometry['type'] == 'MultiPolygon') {
+            // Un multipolygon è già una lista di poligoni. Li aggiungiamo tutti.
+            for (var p in geometry['coordinates']) {
+              allPolygonsRaw.add(p);
+            }
+          }
+
+          // 2. ESTRAZIONE PUNTI
+          for (var rawPolygon in allPolygonsRaw) {
+            // rawPolygon è una lista di anelli (List<List<Coord>>). 
+            // Il primo anello [0] è il contorno esterno.
+            if (rawPolygon is List && rawPolygon.isNotEmpty) {
+              var outerRing = rawPolygon[0];
+              List<LatLng> points = [];
+
+              for (var point in outerRing) {
+                // point dovrebbe essere [long, lat]
+                if (point is List && point.length >= 2) {
+                  // GeoJSON usa [Longitudine, Latitudine]
+                  // FlutterMap vuole [Latitudine, Longitudine]
+                  double lat = point[1].toDouble();
+                  double lng = point[0].toDouble();
+                  points.add(LatLng(lat, lng));
+                }
+              }
+
+              if (points.isNotEmpty) {
+                polygons.add(
+                  Polygon(
+                    points: points,
+                    color: fillColor,
+                    borderColor: borderColor,
+                    borderStrokeWidth: 1.5,
+                    disableHolesBorder: true,
+                    label: feature['properties']?['nome'] ?? "Zona", // Se c'è un nome, lo usiamo dopo
+                  ),
+                );
+                geometries.add(points);
+              }
+>>>>>>> af91633d5b250281966be9096166cbb5e1d80298
             }
           }
         }

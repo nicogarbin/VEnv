@@ -1,0 +1,7 @@
+gcloud scheduler jobs create http fetch-weather-job --location=europe-west1 --schedule="*/30 * * * *" --uri="https://europe-west12-ecstatic-gantry-477200-f2.cloudfunctions.net/fetch_venice_weather" --http-method=GET --time-zone="Europe/Rome" --description="Recupera dati meteo ogni 30 minuti"
+
+gcloud scheduler jobs create http fetch-air-quality-job --location=europe-west1 --schedule="*/30 * * * *" --uri="https://europe-west12-ecstatic-gantry-477200-f2.cloudfunctions.net/fetch_venice_air_quality" --http-method=GET --time-zone="Europe/Rome" --description="Recupera qualità dell'aria ogni 30 minuti"
+
+gcloud scheduler jobs create http fetch-tide-job --location=europe-west1 --schedule="*/30 * * * *" --uri="https://europe-west12-ecstatic-gantry-477200-f2.cloudfunctions.net/fetch_tide_levels" --http-method=GET --time-zone="Europe/Rome" --description="Recupera livelli marea ogni 30 minuti"
+
+gcloud scheduler jobs create http fetch-uv-job --location=europe-west1 --schedule="*/30 * * * *" --uri="https://europe-west12-ecstatic-gantry-477200-f2.cloudfunctions.net/fetch_uv_data" --http-method=GET --time-zone="Europe/Rome" --description="Recupera dati UV ogni 30 minuti"

@@ -14,7 +14,7 @@ class DataHistoryScreen extends StatefulWidget {
   State<DataHistoryScreen> createState() => _DataHistoryScreenState();
 }
 
-enum _Metric { tideLevel, airQuality, temperature }
+enum _Metric { tideLevel, airQuality, temperature, uvIndex }
 
 enum _Range { h24, w1, m1 }
 
@@ -51,7 +51,7 @@ class _MetricSpec {
           collection: 'Maree',
           valueField: 'altezza',
           timeField: 'data',
-          areaField: 'zona',
+          areaField: 'zona_id',
           title: 'Marea',
           unit: 'cm',
           isTideMeters: true,
@@ -72,6 +72,15 @@ class _MetricSpec {
           title: 'Temperatura',
           unit: '°C',
         );
+      case _Metric.uvIndex:
+        return const _MetricSpec(
+          collection: 'Raggi UV',
+          valueField: 'valore',
+          timeField: 'data',
+          areaField: 'zona_id',
+          title: 'Raggi UV',
+          unit: 'UV',
+        );
     }
   }
 }
@@ -82,25 +91,34 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
   static const _background = Color(0xFFEFF6FF); // Sfondo standard richiesto
   static const _textDark = Color(0xFF0F172A);
 
-  static const _tideStations = <String>[
-    'Punta Salute Canal Grande',
-    'Punta Salute Canale Giudecca',
-    'Venezia Misericordia',
-    'S. Geremia',
-    'Giudecca',
-    'Burano',
-    'Fusina',
-    'Laguna nord Saline',
-    'Malamocco Porto',
-    'Diga sud Lido',
-    'Diga nord Malamocco',
-    'Diga sud Chioggia',
-    'Chioggia Vigo',
-    'Chioggia porto',
-    'Piattaforma Acqua Alta Siap',
-  ];
-
   static const _genericAreas = <String>['Venezia'];
+
+  static const _uvZones = <String>[
+    'Zona 1',
+    'Zona 2',
+    'Zona 3',
+    'Zona 4',
+    'Zona 5',
+    'Zona 6',
+    'Zona 7',
+    'Zona 8',
+    'Zona 9',
+    'Zona 10',
+    'Zona 11',
+    'Zona 12',
+    'Zona 13',
+    'Zona 14',
+    'Zona 15',
+    'Zona 16',
+    'Zona 17',
+    'Zona 18',
+    'Zona 19',
+    'Zona 20',
+    'Zona 21',
+    'Zona 22',
+    'Zona 23',
+    'Zona 24',
+  ];
 
   int _selectedAreaIndex = 0;
   _Metric _selectedMetric = _Metric.tideLevel;
@@ -156,29 +174,6 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
     return null;
   }
 
-  /// Carica le zone realmente presenti nella collezione "Maree".
-  /// Firestore non ha "distinct", quindi estraiamo le zone dagli ultimi N documenti.
-  Stream<List<String>> _watchTideAreas() {
-    return FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default')
-        .collection('Maree')
-        .orderBy('data', descending: true)
-        .limit(2000)
-        .snapshots()
-        .map((snapshot) {
-          final set = <String>{};
-          for (final doc in snapshot.docs) {
-            final data = doc.data();
-            final z = data['zona'];
-            if (z is String) {
-              final trimmed = z.trim();
-              if (trimmed.isNotEmpty) set.add(trimmed);
-            }
-          }
-          final list = set.toList()..sort();
-          return list.isEmpty ? _tideStations : list;
-        });
-  }
-
   Stream<
     ({
       List<_SeriesPoint> points,
@@ -195,15 +190,25 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
     Query<Map<String, dynamic>> query;
 
     if (spec.areaField != null && _selectedMetric == _Metric.tideLevel) {
-      // Per avere un grafico corretto serve ordine per "data".
-      // Questo richiede indice composito: (zona ASC) + (data DESC) sulla collezione "Maree".
+      // Per Marea: zona_id è numerico, estraiamo il numero da "Zona X"
+      // Richiede indice composito: (zona_id ASC) + (data DESC) sulla collezione "Maree"
+      final zoneNumber = int.tryParse(selectedArea.replaceAll('Zona ', '')) ?? 1;
       query = FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default')
           .collection(spec.collection)
-          .where(spec.areaField!, isEqualTo: selectedArea)
+          .where(spec.areaField!, isEqualTo: zoneNumber)
           .orderBy(spec.timeField, descending: true)
           .limit(3000);
+    } else if (spec.areaField != null && _selectedMetric == _Metric.uvIndex) {
+      // Per UV: zona_id è numerico, estraiamo il numero da "Zona X"
+      // Richiede indice composito: (zona_id ASC) + (data DESC) sulla collezione "Raggi UV"
+      final zoneNumber = int.tryParse(selectedArea.replaceAll('Zona ', '')) ?? 1;
+      query = FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default')
+          .collection(spec.collection)
+          .where(spec.areaField!, isEqualTo: zoneNumber)
+          .orderBy(spec.timeField, descending: true)
+          .limit(1000);
     } else {
-      // Per aria/temperatura: nessun filtro, NESSUN orderBy (richiede indice)
+      // Per aria/temperatura: nessun filtro per data, verrà fatto lato client
       query = FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default')
           .collection(spec.collection)
           .orderBy(spec.timeField, descending: true)
@@ -247,6 +252,7 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
         if (latest == null || dt.isAfter(latest)) latest = dt;
         if (oldest == null || dt.isBefore(oldest)) oldest = dt;
 
+        // Filtra per range temporale lato client (più affidabile del filtro Firestore su stringhe)
         if (dt.isBefore(cutoff)) continue;
 
         if (spec.isTideMeters) {
@@ -299,8 +305,8 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
     final listTopPadding =
         MediaQuery.of(context).padding.top + headerBaseHeight + 24;
 
-    final areasStream = _selectedMetric == _Metric.tideLevel
-        ? _watchTideAreas()
+    final areasStream = (_selectedMetric == _Metric.tideLevel || _selectedMetric == _Metric.uvIndex)
+        ? Stream.value(_uvZones)
         : Stream.value(_genericAreas);
 
     return Scaffold(
@@ -316,8 +322,8 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                 stream: areasStream,
                 builder: (context, areasSnap) {
                   final areas = areasSnap.data ??
-                      (_selectedMetric == _Metric.tideLevel
-                          ? _tideStations
+                      ((_selectedMetric == _Metric.tideLevel || _selectedMetric == _Metric.uvIndex)
+                          ? _uvZones
                           : _genericAreas);
 
                   final safeIndex = areas.isEmpty
@@ -338,8 +344,8 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _SectionTitle(
-                        title: _selectedMetric == _Metric.tideLevel
-                            ? 'Seleziona Stazione'
+                        title: (_selectedMetric == _Metric.tideLevel || _selectedMetric == _Metric.uvIndex)
+                            ? 'Seleziona Zona'
                             : 'Area',
                         foregroundColor: _textDark,
                       ),
@@ -384,15 +390,28 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
                           builder: (context, snapshot) {
                             if (snapshot.hasError) {
                               final details = snapshot.error.toString();
-                              final friendly = details
-                                      .toLowerCase()
-                                      .contains('requires an index')
-                                  ? 'Manca un indice Firestore per la query Maree.\n'
+                              String friendly;
+                              if (details.toLowerCase().contains('requires an index')) {
+                                // Messaggio dinamico basato sulla metrica corrente
+                                if (_selectedMetric == _Metric.tideLevel) {
+                                  friendly = 'Manca un indice Firestore per la query Maree.\n'
                                       'Crea un indice composito su:\n'
                                       '- Collection: Maree\n'
-                                      '- Fields: zona (ASC), data (DESC)\n\n'
-                                      'Dettagli:\n$details'
-                                  : 'Errore Firebase:\n$details';
+                                      '- Fields: zona_id (ASC), data (DESC)\n\n'
+                                      'Dettagli:\n$details';
+                                } else if (_selectedMetric == _Metric.uvIndex) {
+                                  friendly = 'Manca un indice Firestore per la query Raggi UV.\n'
+                                      'Crea un indice composito su:\n'
+                                      '- Collection: Raggi UV\n'
+                                      '- Fields: zona_id (ASC), data (DESC)\n\n'
+                                      'Dettagli:\n$details';
+                                } else {
+                                  friendly = 'Manca un indice Firestore per la query ${metricSpec.title}.\n'
+                                      'Dettagli:\n$details';
+                                }
+                              } else {
+                                friendly = 'Errore Firebase:\n$details';
+                              }
 
                               return _TrendCard(
                                 primary: _primary,
@@ -643,12 +662,12 @@ class _MetricGrid extends StatelessWidget {
     return GridView.count(
       primary: false,
       padding: EdgeInsets.zero,
-      crossAxisCount: 3,
+      crossAxisCount: 4,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
-      childAspectRatio: 1,
+      childAspectRatio: 0.7,
       children: [
         _MetricTile(
           selected: selected == _Metric.tideLevel,
@@ -670,6 +689,13 @@ class _MetricGrid extends StatelessWidget {
           icon: Icons.thermostat,
           title: 'Temp',
           onTap: () => onSelect(_Metric.temperature),
+        ),
+        _MetricTile(
+          selected: selected == _Metric.uvIndex,
+          primary: primary,
+          icon: Icons.wb_sunny,
+          title: 'Raggi UV',
+          onTap: () => onSelect(_Metric.uvIndex),
         ),
       ],
     );
@@ -1015,7 +1041,20 @@ class _TrendChart extends StatelessWidget {
     final yInterval = yRange > 0 ? yRange / 4 : 1.0;
     
     final xRange = maxX - minX;
-    final xInterval = xRange > 0 ? xRange / 3 : 1.0;
+    // Calcola un numero ragionevole di label in base al range temporale
+    int maxXLabels;
+    switch (range) {
+      case _Range.h24:
+        maxXLabels = 4; // Es: 00:00, 06:00, 12:00, 18:00
+        break;
+      case _Range.w1:
+        maxXLabels = 4; // Es: Lun, Mer, Ven, Dom
+        break;
+      case _Range.m1:
+        maxXLabels = 4; // Es: 1/1, 8/1, 15/1, 22/1
+        break;
+    }
+    final xInterval = xRange > 0 ? xRange / maxXLabels : 1.0;
 
     return LineChart(
       LineChartData(
@@ -1061,6 +1100,13 @@ class _TrendChart extends StatelessWidget {
               reservedSize: 28,
               interval: xInterval,
               getTitlesWidget: (value, meta) {
+                // Nascondi le label troppo vicine ai margini (primi e ultimi 15% del range)
+                final leftThreshold = minX + (maxX - minX) * 0.10;
+                final rightThreshold = maxX - (maxX - minX) * 0.10;
+                if ((value < leftThreshold && value > minX) || (value > rightThreshold && value < maxX)) {
+                  return const SizedBox.shrink();
+                }
+                
                 final dt = DateTime.fromMillisecondsSinceEpoch(value.toInt());
                 return Padding(
                   padding: const EdgeInsets.only(top: 8),
@@ -1147,7 +1193,7 @@ class _RangePills extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
             color: selected ? primary : Colors.transparent,
             borderRadius: BorderRadius.circular(999),
@@ -1157,7 +1203,7 @@ class _RangePills extends StatelessWidget {
             style: TextStyle(
               color: selected ? Colors.white : const Color(0xFF9CA3AF),
               fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-              fontSize: 12,
+              fontSize: 11,
             ),
           ),
         ),
@@ -1165,7 +1211,7 @@ class _RangePills extends StatelessWidget {
     }
 
     return Container(
-      padding: const EdgeInsets.all(4),
+      padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.10),
         borderRadius: BorderRadius.circular(999),

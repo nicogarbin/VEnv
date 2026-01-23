@@ -17,9 +17,9 @@ class _MainScreenState extends State<MainScreen> {
 
   final List<Widget> _pages = [
     const DynamicMapScreen(),
-    const NewsScreen(),
-    const DataHistoryScreen(),
     const AlternativePathScreen(),
+    const DataHistoryScreen(),
+    const NewsScreen(),
   ];
 
   @override
@@ -56,16 +56,16 @@ class _MainScreenState extends State<MainScreen> {
             label: 'Mappa',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.newspaper),
-            label: 'News',
+            icon: Icon(Icons.alt_route),
+            label: 'Percorsi',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.history),
             label: 'Storico',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.alt_route),
-            label: 'Percorsi',
+            icon: Icon(Icons.newspaper),
+            label: 'News',
           ),
         ],
       ),

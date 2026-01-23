@@ -1,7 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../main_screen.dart';
 
 class NewsScreen extends StatelessWidget {
   const NewsScreen({super.key});
@@ -78,19 +77,12 @@ class NewsScreen extends StatelessWidget {
           ),
 
 
-          Positioned(
+          const Positioned(
             top: 0,
             left: 0,
             right: 0,
             child: _StickyHeader(
               title: 'Notizie Venezia',
-              onBack: () {
-
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => const MainScreen()),
-                  (route) => false,
-                );
-              },
             ),
           ),
         ],
@@ -101,11 +93,9 @@ class NewsScreen extends StatelessWidget {
 
 class _StickyHeader extends StatelessWidget {
   final String title;
-  final VoidCallback onBack;
 
   const _StickyHeader({
     required this.title,
-    required this.onBack,
   });
 
   @override
@@ -121,14 +111,7 @@ class _StickyHeader extends StatelessWidget {
           ),
           child: Row(
             children: [
-              IconButton(
-                onPressed: onBack,
-                icon: const Icon(Icons.arrow_back, color: Color(0xFF0F172A)),
-                style: IconButton.styleFrom(
-                  backgroundColor: Colors.white.withOpacity(0.5),
-                  shape: const CircleBorder(),
-                ),
-              ),
+              const SizedBox(width: 48),
               Expanded(
                 child: Text(
                   title,

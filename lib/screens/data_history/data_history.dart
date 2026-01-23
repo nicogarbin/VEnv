@@ -5,7 +5,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
-import '../main_screen.dart'; // Import necessario per tornare alla Mappa
 
 class DataHistoryScreen extends StatefulWidget {
   const DataHistoryScreen({super.key});
@@ -490,19 +489,12 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
           ),
 
           // 2. HEADER FISSO (Identico alle altre pagine)
-          Positioned(
+          const Positioned(
             top: 0,
             left: 0,
             right: 0,
             child: _StickyHeader(
               title: 'Storico Dati',
-              onBack: () {
-                // Torna alla schermata principale (Mappa)
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => const MainScreen()),
-                  (route) => false,
-                );
-              },
             ),
           ),
         ],
@@ -516,9 +508,8 @@ class _DataHistoryScreenState extends State<DataHistoryScreen> {
 // HEADER AGGIORNATO (Stile coerente)
 class _StickyHeader extends StatelessWidget {
   final String title;
-  final VoidCallback onBack;
 
-  const _StickyHeader({required this.title, required this.onBack});
+  const _StickyHeader({required this.title});
 
   @override
   Widget build(BuildContext context) {
@@ -538,14 +529,7 @@ class _StickyHeader extends StatelessWidget {
           ),
           child: Row(
             children: [
-              IconButton(
-                onPressed: onBack,
-                icon: const Icon(Icons.arrow_back, color: Color(0xFF0F172A)),
-                style: IconButton.styleFrom(
-                  backgroundColor: Colors.white.withOpacity(0.5),
-                  shape: const CircleBorder(),
-                ),
-              ),
+              const SizedBox(width: 48),
               Expanded(
                 child: Text(
                   title,

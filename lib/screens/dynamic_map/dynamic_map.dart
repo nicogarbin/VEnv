@@ -171,7 +171,6 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
 
   // Stato Maree
   final Map<String, TideReading> _tideData = {};
-  bool _isLoadingTide = true;
 
   // Cache Dati Ambientali (per stima)
   final List<EnvironmentalReading> _cachedEnvData = [];
@@ -234,14 +233,12 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
         if (mounted) {
           setState(() {
             _tideData.addAll(tempMap);
-            _isLoadingTide = false;
           });
         }
       }
     } catch (e) {
       debugPrint("Errore maree: $e");
       // Non blocchiamo la UI, semplicemente i dati non ci saranno
-      if (mounted) setState(() => _isLoadingTide = false);
     }
   }
 
@@ -299,7 +296,6 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
 
     double numerator = 0.0;
     double denominator = 0.0;
-    const double power = 2.0; // Esponente per il peso della distanza (solitamente 2)
     const Distance distanceCalc = Distance();
 
     int validSensors = 0;
@@ -525,9 +521,6 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
   void _showZonePopup(ZoneModel zone) {
     // Calcolo marea stimata nel centro della zona
     final double? estimatedTide = _estimateTideAtPoint(zone.bounds.center);
-    
-    // Recupero comunque il dato della stazione ufficiale per confronto (opzionale)
-    final officialTide = (zone.stationName != null) ? _tideData[zone.stationName] : null;
 
     // Future per i dati ambientali
     final environmentalFuture = _fetchEnvironmentalData(zone.bounds.center);
@@ -660,8 +653,8 @@ class _DynamicMapScreenState extends State<DynamicMapScreen> {
                                     style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: riskColor),
                                   ),
                                   if (anyEstimated)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4.0),
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 4.0),
                                       child: Text(
                                         "* Valori mancanti stimati",
                                         style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: Colors.black45),

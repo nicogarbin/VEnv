@@ -308,14 +308,6 @@ class _AlternativePathScreenState extends State<AlternativePathScreen> {
     }
     return (intersectCount % 2) != 0;
   }
-  
-  // 0=Verde (<20), 1=Giallo (<50), 2=Arancio (<80), 3=Rosso
-  int _getRiskTier(double risk) {
-    if (risk < 20) return 0;
-    if (risk < 50) return 1;
-    if (risk < 80) return 2;
-    return 3;
-  }
 
   /// Calcola il rischio in un punto (0-100)
   double _calculateRiskAtPoint(LatLng point) {

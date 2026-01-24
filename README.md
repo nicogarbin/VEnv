@@ -10,6 +10,7 @@ Prima di iniziare, assicurati di avere installato i seguenti strumenti:
 
 * **Flutter SDK:** [Scarica qui](https://docs.flutter.dev/get-started/install)
 * **Android Studio:** [Scarica qui](https://developer.android.com/studio) (necessario per l'emulatore e l'SDK Android).
+* **Visual Studio Code (Consigliato):** [Scarica qui](https://code.visualstudio.com/) come editor di testo principale.
 * **Git:** Per clonare il progetto.
 * **Xcode (Solo per macOS):** Necessario per compilare ed eseguire la versione iOS.
 
@@ -19,17 +20,22 @@ Prima di iniziare, assicurati di avere installato i seguenti strumenti:
 
 1.  **Clona la repository:**
     ```bash
-    git clone [https://github.com/tuo-username/VEnv.git](https://github.com/tuo-username/VEnv.git)
+    git clone https://github.com/nicogarbin/VEnv.git
     cd VEnv
     ```
 
-2.  **Installa le dipendenze di Flutter:**
+2.  **Configurazione Visual Studio Code:**
+    * Apri VS Code e vai nella sezione **Extensions** (Ctrl+Shift+X).
+    * Cerca e installa l'estensione ufficiale **"Flutter"** (che installerà automaticamente anche Dart).
+    * Apri la cartella del progetto `VEnv` in VS Code.
+
+3.  **Installa le dipendenze di Flutter:**
     Esegui il comando dalla cartella principale del progetto:
     ```bash
     flutter pub get
     ```
 
-3.  **Verifica lo stato del sistema:**
+4.  **Verifica lo stato del sistema:**
     Controlla che non manchino componenti fondamentali:
     ```bash
     flutter doctor
